@@ -5,7 +5,7 @@ import {
   Check, AlertTriangle, WifiOff, RefreshCw, Download, Filter, Power,
   Eye, EyeOff, Activity, Sliders, Play, Trash, AlertCircle, CheckCircle,
   XCircle, Info, Copy, ExternalLink, Save, Volume2, VolumeX, Terminal,
-  Clock, Shield, User, FileCode, CheckSquare, Square, RefreshCcw, Network
+  Clock, Shield, User, FileCode, CheckSquare, Square, RefreshCcw, Network, LogOut
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, LineChart, Line,
@@ -299,7 +299,20 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [currentUser] = useState({ name: 'Sarah Chen', role: 'admin', email: 'sarah.chen@isp.net' });
+  
+  // Authentication states
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('olt_manager_auth') === 'true';
+  });
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = localStorage.getItem('olt_manager_current_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
   const [alarmAudio, setAlarmAudio] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [notifications, setNotifications] = useState([
@@ -686,16 +699,19 @@ export default function App() {
 
   // ==================== OLT CRUD ACTIONS ====================
   const openAddOlt = () => {
+    if (!checkPermission('Add OLT Chassis', 'engineer')) return;
     setOltForm({ name: '', ip: '', port: 23, community: 'public', username: '', password: '', vendor: 'VSOL', technology: 'GPON', model: 'V2808', location: 'DC-Core-01', notes: '' });
     setOltModalOpen(true);
   };
 
   const openEditOlt = (olt) => {
+    if (!checkPermission('Edit OLT Chassis', 'engineer')) return;
     setOltForm({ ...olt });
     setOltModalOpen(true);
   };
 
   const saveOlt = () => {
+    if (!checkPermission('Save OLT Chassis', 'engineer')) return;
     if (!oltForm.name || !oltForm.ip) {
       addToast('Please fill out all required fields.', 'danger');
       return;
@@ -749,6 +765,7 @@ export default function App() {
   };
 
   const deleteOlt = (id) => {
+    if (!checkPermission('Delete OLT Chassis', 'engineer')) return;
     const oltName = oltList.find(o => o.id === id)?.name || 'OLT';
     if (confirm(`Are you sure you want to delete ${oltName} from inventory? This will remove all associated ONU stats.`)) {
       setOltList(prev => prev.filter(o => o.id !== id));
@@ -763,6 +780,7 @@ export default function App() {
 
   // ==================== SNMP ONU SCANNER (DYNAMIC DISCOVERY) ====================
   const syncOnusViaSnmp = (oltId) => {
+    if (!checkPermission('Sync SNMP ONUs', 'engineer')) return;
     const targetOlt = oltList.find(o => o.id === oltId);
     if (!targetOlt) return;
     
@@ -821,16 +839,19 @@ export default function App() {
 
   // ==================== ROUTERS & SWITCHES ACTIONS ====================
   const openAddRouter = () => {
+    if (!checkPermission('Add Core Infrastructure Device', 'engineer')) return;
     setRouterForm({ name: '', ip: '', port: 22, community: 'public', username: 'admin', password: '', vendor: 'Juniper', deviceType: 'router', model: 'MX204', location: 'DC-Core-01', notes: '' });
     setRouterModalOpen(true);
   };
 
   const openEditRouter = (router) => {
+    if (!checkPermission('Edit Core Infrastructure Device', 'engineer')) return;
     setRouterForm({ ...router });
     setRouterModalOpen(true);
   };
 
   const saveRouter = () => {
+    if (!checkPermission('Save Core Infrastructure Device', 'engineer')) return;
     if (!routerForm.name || !routerForm.ip) {
       addToast('Please fill out all required fields.', 'danger');
       return;
@@ -866,6 +887,7 @@ export default function App() {
   };
 
   const deleteRouter = (id) => {
+    if (!checkPermission('Delete Core Infrastructure Device', 'engineer')) return;
     const routerName = routerList.find(r => r.id === id)?.name || 'Device';
     if (confirm(`Remove core device ${routerName} from inventory? All scanned interface records will be wiped.`)) {
       setRouterList(prev => prev.filter(r => r.id !== id));
@@ -878,6 +900,7 @@ export default function App() {
 
   // ==================== SNMP INTERFACE SCANNER ====================
   const syncRouterInterfaces = (routerId) => {
+    if (!checkPermission('Sync Core Interfaces via SNMP', 'engineer')) return;
     const router = routerList.find(r => r.id === routerId);
     if (!router) return;
 
@@ -964,6 +987,7 @@ export default function App() {
 
   // ==================== SSH CLI TERMINAL CONSOLE EMULATOR ====================
   const openConsoleShell = (router) => {
+    if (!checkPermission('Open SSH CLI Shell', 'engineer')) return;
     setRouterConsoleLogs([
       `[Connecting to administrative shell ${router.ip} on port 22...]`,
       `[Encrypted connection established via SSH-2.0-OpenSSH_8.0]`,
@@ -1153,6 +1177,7 @@ export default function App() {
   };
 
   const bulkReboot = async () => {
+    if (!checkPermission('Reboot ONUs', 'engineer')) return;
     if (!confirm(`Confirm reboot command transmission to the ${selectedOnus.length} selected ONUs?`)) return;
     addToast(`Reboot sequence initiated for ${selectedOnus.length} ONUs.`, 'success');
     logActivity('Bulk ONU Reboot', `Issued hardware reboot to ${selectedOnus.length} ONUs`);
@@ -1178,6 +1203,7 @@ export default function App() {
   };
 
   const bulkDeregister = () => {
+    if (!checkPermission('Deregister ONUs', 'engineer')) return;
     if (!confirm(`Are you absolutely sure you want to deregister and clear configuration profiles for these ${selectedOnus.length} ONUs?`)) return;
     
     setOnuList(prev => prev.filter(onu => !selectedOnus.includes(onu.id)));
@@ -1187,6 +1213,7 @@ export default function App() {
   };
 
   const applyProfile = () => {
+    if (!checkPermission('Apply ONU Config Profile', 'engineer')) return;
     if (!selectedProfile) {
       addToast('Please select a profile template.', 'danger');
       return;
@@ -1217,6 +1244,7 @@ export default function App() {
   };
 
   const runConfiguration = () => {
+    if (!checkPermission('Execute Device Configuration', 'engineer')) return;
     if (!configTargetOlt) {
       addToast('Please choose a target OLT device.', 'danger');
       return;
@@ -1278,12 +1306,14 @@ export default function App() {
 
   // ==================== USER MANAGEMENT ACTIONS ====================
   const openAddUser = () => {
-    setUserForm({ name: '', email: '', role: 'engineer', status: 'active', lastLogin: new Date().toISOString() });
+    if (!checkPermission('Manage User Accounts', 'admin')) return;
+    setUserForm({ name: '', email: '', role: 'engineer', status: 'active', lastLogin: new Date().toISOString(), password: '' });
     setUserModalOpen(true);
   };
 
   const openEditUser = (usr) => {
-    setUserForm({ ...usr });
+    if (!checkPermission('Manage User Accounts', 'admin')) return;
+    setUserForm({ ...usr, password: '' });
     setUserModalOpen(true);
   };
 
@@ -1293,10 +1323,19 @@ export default function App() {
       return;
     }
     if (userForm.id) {
-      setUserList(prev => prev.map(u => u.id === userForm.id ? userForm : u));
+      const existingUser = userList.find(u => u.id === userForm.id);
+      const updatedUser = { 
+        ...userForm, 
+        password: userForm.password || existingUser?.password || 'password123' 
+      };
+      setUserList(prev => prev.map(u => u.id === userForm.id ? updatedUser : u));
       addToast(`User account for ${userForm.name} updated.`, 'success');
     } else {
-      const newUser = { ...userForm, id: Date.now() };
+      const newUser = { 
+        ...userForm, 
+        id: Date.now(), 
+        password: userForm.password || 'password123' 
+      };
       setUserList(prev => [...prev, newUser]);
       addToast(`Created user account for ${userForm.name}.`, 'success');
       logActivity('User Added', `NOC Administrator provisioned user account: ${userForm.email}`);
@@ -1305,6 +1344,7 @@ export default function App() {
   };
 
   const deleteUser = (id) => {
+    if (!checkPermission('Manage User Accounts', 'admin')) return;
     if (id === 1) {
       addToast('Cannot delete primary system administrator.', 'danger');
       return;
@@ -1319,6 +1359,7 @@ export default function App() {
 
   // ==================== SYSTEM SETTINGS & DB ACTIONS ====================
   const saveSettings = () => {
+    if (!checkPermission('Modify Settings', 'admin')) return;
     addToast('SNMP configuration saved and applied.', 'success');
     logActivity('Settings Modified', 'Applied global SNMP configuration and telemetry pooling thresholds');
   };
@@ -1330,6 +1371,7 @@ export default function App() {
 
   // WIPE DATABASE
   const wipeAllTelemetry = () => {
+    if (!checkPermission('Wipe Database Registry', 'admin')) return;
     if (!confirm('Are you absolutely sure you want to clear OLT, ONU, Router, Switch, and Alarm lists? This will empty the active inventory.')) return;
     setOltList([]);
     setOnuList([]);
@@ -1405,12 +1447,95 @@ export default function App() {
     logActivity('Mock Data Ingested', 'Loaded multi-vendor telemetry archive pack into local memory');
   };
 
+  // ==================== PERMISSIONS & AUTHENTICATION ====================
+  const checkPermission = (action, requiredRole = 'admin') => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    if (requiredRole === 'engineer' && currentUser.role === 'engineer') return true;
+    
+    addToast(`Permission Denied: ${currentUser.role.toUpperCase()} role is unauthorized to perform action: ${action}`, 'danger');
+    return false;
+  };
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setLoginError('');
+    if (!loginForm.email || !loginForm.password) {
+      setLoginError('All authentication credentials are required.');
+      return;
+    }
+    setLoginLoading(true);
+    setTimeout(() => {
+      // Find user in userList
+      const matchedUser = userList.find(u => u.email.toLowerCase() === loginForm.email.toLowerCase());
+      // Fallback password checks to ensure seed users can login even if localStorage doesn't have password keys yet
+      const isValidPassword = matchedUser && (
+        matchedUser.password === loginForm.password ||
+        (matchedUser.id === 1 && loginForm.password === 'admin123') ||
+        (matchedUser.id === 2 && loginForm.password === 'engineer123') ||
+        (matchedUser.id === 3 && loginForm.password === 'engineer123') ||
+        (matchedUser.id === 4 && loginForm.password === 'viewer123') ||
+        (matchedUser.id === 5 && loginForm.password === 'admin123')
+      );
+
+      if (matchedUser && isValidPassword) {
+        if (matchedUser.status !== 'active') {
+          setLoginError('Account has been suspended. Contact system administrator.');
+          setLoginLoading(false);
+          return;
+        }
+        
+        // Update last login timestamp in state and list
+        const updatedUser = { ...matchedUser, lastLogin: new Date().toISOString() };
+        setUserList(prev => prev.map(u => u.id === matchedUser.id ? updatedUser : u));
+        
+        setIsAuthenticated(true);
+        setCurrentUser(updatedUser);
+        localStorage.setItem('olt_manager_auth', 'true');
+        localStorage.setItem('olt_manager_current_user', JSON.stringify(updatedUser));
+        
+        addToast(`Welcome back, ${matchedUser.name}! Session established.`, 'success');
+        
+        // Log to NOC audit logs
+        const newLog = {
+          id: Date.now(),
+          timestamp: new Date().toISOString(),
+          user: matchedUser.name,
+          action: 'User Login',
+          detail: `Operator ${matchedUser.email} authenticated successfully (Role: ${matchedUser.role})`
+        };
+        setActivityLog(prev => [newLog, ...prev]);
+      } else {
+        setLoginError('Invalid corporate email or security access code.');
+      }
+      setLoginLoading(false);
+    }, 1000);
+  };
+
+  const handleLogout = () => {
+    if (currentUser) {
+      const newLog = {
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        user: currentUser.name,
+        action: 'User Logout',
+        detail: `Operator ${currentUser.email} session terminated.`
+      };
+      setActivityLog(prev => [newLog, ...prev]);
+    }
+    setIsAuthenticated(false);
+    setCurrentUser(null);
+    localStorage.removeItem('olt_manager_auth');
+    localStorage.removeItem('olt_manager_current_user');
+    addToast('Secure NOC session terminated.', 'info');
+  };
+
   // ==================== AUDIT LOGGER ====================
   const logActivity = (action, detail) => {
     const newLog = {
       id: Date.now(),
       timestamp: new Date().toISOString(),
-      user: currentUser.name,
+      user: currentUser?.name || 'System',
       action,
       detail
     };
@@ -1619,53 +1744,53 @@ export default function App() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Name <span className="text-olt-red">*</span></label>
-            <input value={oltForm?.name || ''} onChange={e => setOltForm(f => ({ ...f, name: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" placeholder="e.g. OLT-CORE-MAIN" />
+            <input value={oltForm?.name || ''} onChange={e => setOltForm({ ...oltForm, name: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" placeholder="e.g. OLT-CORE-MAIN" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">IP Address <span className="text-olt-red">*</span></label>
-            <input value={oltForm?.ip || ''} onChange={e => setOltForm(f => ({ ...f, ip: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none font-mono" placeholder="e.g. 10.0.0.1" />
+            <input value={oltForm?.ip || ''} onChange={e => setOltForm({ ...oltForm, ip: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none font-mono" placeholder="e.g. 10.0.0.1" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Port</label>
-            <input type="number" value={oltForm?.port || 23} onChange={e => setOltForm(f => ({ ...f, port: parseInt(e.target.value) }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input type="number" value={oltForm?.port || 23} onChange={e => setOltForm({ ...oltForm, port: parseInt(e.target.value) || 0 })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">SNMP Community</label>
-            <input value={oltForm?.community || ''} onChange={e => setOltForm(f => ({ ...f, community: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input value={oltForm?.community || ''} onChange={e => setOltForm({ ...oltForm, community: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Username</label>
-            <input value={oltForm?.username || ''} onChange={e => setOltForm(f => ({ ...f, username: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input value={oltForm?.username || ''} onChange={e => setOltForm({ ...oltForm, username: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Password</label>
-            <input type="password" value={oltForm?.password || ''} onChange={e => setOltForm(f => ({ ...f, password: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input type="password" value={oltForm?.password || ''} onChange={e => setOltForm({ ...oltForm, password: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Vendor</label>
-            <select value={oltForm?.vendor || 'VSOL'} onChange={e => setOltForm(f => ({ ...f, vendor: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={oltForm?.vendor || 'VSOL'} onChange={e => setOltForm({ ...oltForm, vendor: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               {['VSOL', 'CDATA', 'BDCOM', 'ZTE', 'Huawei', 'Nokia'].map(v => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Technology</label>
-            <select value={oltForm?.technology || 'GPON'} onChange={e => setOltForm(f => ({ ...f, technology: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={oltForm?.technology || 'GPON'} onChange={e => setOltForm({ ...oltForm, technology: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               {['GPON', 'EPON', 'XGS-PON'].map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Model</label>
-            <input value={oltForm?.model || ''} onChange={e => setOltForm(f => ({ ...f, model: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input value={oltForm?.model || ''} onChange={e => setOltForm({ ...oltForm, model: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Location</label>
-            <select value={oltForm?.location || ''} onChange={e => setOltForm(f => ({ ...f, location: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={oltForm?.location || ''} onChange={e => setOltForm({ ...oltForm, location: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               {['DC-Core-01', 'DC-Edge-02', 'POP-North', 'POP-South', 'POP-East', 'POP-West', 'CO-Main', 'CO-Backup'].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
           <div className="col-span-2">
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Notes</label>
-            <textarea value={oltForm?.notes || ''} onChange={e => setOltForm(f => ({ ...f, notes: e.target.value }))} rows={2} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none resize-none" placeholder="Administrative annotations..." />
+            <textarea value={oltForm?.notes || ''} onChange={e => setOltForm({ ...oltForm, notes: e.target.value })} rows={2} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none resize-none" placeholder="Administrative annotations..." />
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-6">
@@ -1682,6 +1807,7 @@ export default function App() {
     const [expandedPort, setExpandedPort] = useState(null);
 
     const handleRebootOlt = async () => {
+      if (!checkPermission('Reboot OLT Chassis', 'engineer')) return;
       if (!confirm(`Warning: You are initiating a full systems reboot for ${olt.name}. All active customer PON links will collapse. Proceed?`)) return;
       addToast(`Transmiting reboot sequence for OLT ${olt.name}...`, 'danger');
       setOltList(prev => prev.map(o => o.id === olt.id ? { ...o, status: 'offline', uptime: 0, cpu: 0, memory: 0 } : o));
@@ -2051,54 +2177,54 @@ export default function App() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Host Name <span className="text-olt-red">*</span></label>
-            <input value={routerForm?.name || ''} onChange={e => setRouterForm(f => ({ ...f, name: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" placeholder="e.g. Core-Router-01" />
+            <input value={routerForm?.name || ''} onChange={e => setRouterForm({ ...routerForm, name: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" placeholder="e.g. Core-Router-01" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">IP Address <span className="text-olt-red">*</span></label>
-            <input value={routerForm?.ip || ''} onChange={e => setRouterForm(f => ({ ...f, ip: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none font-mono" placeholder="e.g. 10.0.0.1" />
+            <input value={routerForm?.ip || ''} onChange={e => setRouterForm({ ...routerForm, ip: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none font-mono" placeholder="e.g. 10.0.0.1" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">SSH Port</label>
-            <input type="number" value={routerForm?.port || 22} onChange={e => setRouterForm(f => ({ ...f, port: parseInt(e.target.value) }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input type="number" value={routerForm?.port || 22} onChange={e => setRouterForm({ ...routerForm, port: parseInt(e.target.value) || 0 })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">SNMP Community</label>
-            <input value={routerForm?.community || ''} onChange={e => setRouterForm(f => ({ ...f, community: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input value={routerForm?.community || ''} onChange={e => setRouterForm({ ...routerForm, community: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">SSH Username</label>
-            <input value={routerForm?.username || ''} onChange={e => setRouterForm(f => ({ ...f, username: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input value={routerForm?.username || ''} onChange={e => setRouterForm({ ...routerForm, username: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">SSH Password</label>
-            <input type="password" value={routerForm?.password || ''} onChange={e => setRouterForm(f => ({ ...f, password: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
+            <input type="password" value={routerForm?.password || ''} onChange={e => setRouterForm({ ...routerForm, password: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Vendor</label>
-            <select value={routerForm?.vendor || 'Juniper'} onChange={e => setRouterForm(f => ({ ...f, vendor: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={routerForm?.vendor || 'Juniper'} onChange={e => setRouterForm({ ...routerForm, vendor: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               {['Juniper', 'MikroTik', 'Cisco', 'Huawei', 'Arista'].map(v => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Device Type</label>
-            <select value={routerForm?.deviceType || 'router'} onChange={e => setRouterForm(f => ({ ...f, deviceType: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={routerForm?.deviceType || 'router'} onChange={e => setRouterForm({ ...routerForm, deviceType: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               <option value="router">Router</option>
               <option value="switch">Switch</option>
             </select>
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Model</label>
-            <input value={routerForm?.model || ''} onChange={e => setRouterForm(f => ({ ...f, model: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" placeholder="e.g. MX240 / CCR1036" />
+            <input value={routerForm?.model || ''} onChange={e => setRouterForm({ ...routerForm, model: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none" placeholder="e.g. MX240 / CCR1036" />
           </div>
           <div>
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Role / Topology Position</label>
-            <select value={routerForm?.role || 'Core'} onChange={e => setRouterForm(f => ({ ...f, role: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={routerForm?.role || 'Core'} onChange={e => setRouterForm({ ...routerForm, role: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               {['Core', 'Aggregation', 'Edge', 'Access'].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
           <div className="col-span-2">
             <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Location Address</label>
-            <select value={routerForm?.location || 'DC-Core-01'} onChange={e => setRouterForm(f => ({ ...f, location: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
+            <select value={routerForm?.location || 'DC-Core-01'} onChange={e => setRouterForm({ ...routerForm, location: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:ring-2 focus:ring-olt-blue/50 focus:outline-none">
               {['DC-Core-01', 'DC-Edge-02', 'POP-North', 'POP-South', 'POP-East', 'POP-West', 'CO-Main', 'CO-Backup'].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
@@ -2735,15 +2861,19 @@ export default function App() {
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Operator Full Name</label>
-              <input value={userForm?.name || ''} onChange={e => setUserForm(u => ({ ...u, name: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none" placeholder="Sarah Chen" />
+              <input value={userForm?.name || ''} onChange={e => setUserForm({ ...userForm, name: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none" placeholder="Sarah Chen" />
             </div>
             <div>
               <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Corporate Email Address</label>
-              <input value={userForm?.email || ''} onChange={e => setUserForm(u => ({ ...u, email: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none" placeholder="s.chen@isp.net" />
+              <input value={userForm?.email || ''} onChange={e => setUserForm({ ...userForm, email: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none" placeholder="s.chen@isp.net" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Security Access Password {userForm?.id && <span className="text-3xs text-olt-muted italic">(Leave blank to keep current)</span>}</label>
+              <input type="password" value={userForm?.password || ''} onChange={e => setUserForm({ ...userForm, password: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono" placeholder="••••••••" />
             </div>
             <div>
               <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1">Security Group Role</label>
-              <select value={userForm?.role || 'engineer'} onChange={e => setUserForm(u => ({ ...u, role: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none">
+              <select value={userForm?.role || 'engineer'} onChange={e => setUserForm({ ...userForm, role: e.target.value })} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none">
                 <option value="admin">Administrator (Write & Command Exec)</option>
                 <option value="engineer">NOC Engineer (Write configs)</option>
                 <option value="viewer">Viewer (Read-only query access)</option>
@@ -2769,11 +2899,11 @@ export default function App() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1 font-mono">SNMP Query Port</label>
-                <input type="number" value={settings.snmpPort} onChange={e => setSettings(s => ({ ...s, snmpPort: parseInt(e.target.value) }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono" />
+                <input type="number" value={settings.snmpPort} onChange={e => setSettings({ ...settings, snmpPort: parseInt(e.target.value) || 0 })} disabled={currentUser?.role !== 'admin'} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono disabled:opacity-50 disabled:cursor-not-allowed" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1 font-mono">SNMP Read Community</label>
-                <input value={settings.snmpCommunity} onChange={e => setSettings(s => ({ ...s, snmpCommunity: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono" />
+                <input value={settings.snmpCommunity} onChange={e => setSettings({ ...settings, snmpCommunity: e.target.value })} disabled={currentUser?.role !== 'admin'} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono disabled:opacity-50 disabled:cursor-not-allowed" />
               </div>
             </div>
           </div>
@@ -2783,16 +2913,16 @@ export default function App() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1 font-mono">Telegram Bot API Token</label>
-                <input value={settings.telegramBot} onChange={e => setSettings(s => ({ ...s, telegramBot: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono text-xs" />
+                <input value={settings.telegramBot} onChange={e => setSettings({ ...settings, telegramBot: e.target.value })} disabled={currentUser?.role !== 'admin'} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-olt-muted uppercase tracking-wider mb-1 font-mono">Telegram Target Chat ID</label>
-                <input value={settings.telegramChatId} onChange={e => setSettings(s => ({ ...s, telegramChatId: e.target.value }))} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono text-xs" />
+                <input value={settings.telegramChatId} onChange={e => setSettings({ ...settings, telegramChatId: e.target.value })} disabled={currentUser?.role !== 'admin'} className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none font-mono text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
               </div>
             </div>
             <div className="flex justify-between items-center bg-olt-surface/20 border border-olt-border rounded-lg p-3 text-xs mt-2">
               <span className="text-olt-muted">Verify Telegram payload routing:</span>
-              <Button size="xs" onClick={() => testNotification('telegram')} variant="secondary">Test Telegram Connection</Button>
+              <Button size="xs" onClick={() => testNotification('telegram')} disabled={currentUser?.role !== 'admin'} variant="secondary">Test Telegram Connection</Button>
             </div>
           </div>
 
@@ -2800,10 +2930,10 @@ export default function App() {
             <h3 className="text-sm font-bold uppercase tracking-wider text-olt-red border-b border-olt-border/30 pb-2">NOC Database Operations</h3>
             <p className="text-xs text-olt-muted">Load default mock datasets for testing layouts, or clear the environment registry to configure your own core nodes.</p>
             <div className="flex flex-wrap gap-3 pt-2">
-              <Button onClick={loadMockTelemetry} variant="secondary" className="flex-1 font-semibold">
+              <Button onClick={loadMockTelemetry} disabled={currentUser?.role !== 'admin'} variant="secondary" className="flex-1 font-semibold">
                 <RefreshCcw size={14} /> Load Telemetry Mock Data
               </Button>
-              <Button onClick={wipeAllTelemetry} variant="danger" className="flex-1 font-semibold">
+              <Button onClick={wipeAllTelemetry} disabled={currentUser?.role !== 'admin'} variant="danger" className="flex-1 font-semibold">
                 <Trash size={14} /> Wipe Database (Start Clean)
               </Button>
             </div>
@@ -2816,7 +2946,7 @@ export default function App() {
                 <span className="text-olt-text">SNMP Loop Interval (Seconds)</span>
                 <span className="font-mono font-bold text-olt-blue">{settings.pollingInterval}s</span>
               </div>
-              <input type="range" min="10" max="300" step="10" value={settings.pollingInterval} onChange={e => setSettings(s => ({ ...s, pollingInterval: parseInt(e.target.value) }))} className="w-full bg-olt-surface outline-none cursor-pointer h-1 rounded-lg accent-olt-blue" />
+              <input type="range" min="10" max="300" step="10" value={settings.pollingInterval} onChange={e => setSettings({ ...settings, pollingInterval: parseInt(e.target.value) || 10 })} disabled={currentUser?.role !== 'admin'} className="w-full bg-olt-surface outline-none cursor-pointer h-1 rounded-lg accent-olt-blue disabled:opacity-50 disabled:cursor-not-allowed" />
               <p className="text-3xs text-olt-muted mt-1">Lower polling rates increase traffic load but offer higher dashboard granularity.</p>
             </div>
           </div>
@@ -2857,6 +2987,79 @@ export default function App() {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     addToast('All notifications marked read', 'success');
   };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-olt-bg text-olt-text grid-pattern flex items-center justify-center p-4 selection:bg-olt-blue selection:text-white">
+        <div className="w-full max-w-md bg-olt-panel border border-olt-border rounded-2xl shadow-2xl p-8 space-y-6 relative overflow-hidden backdrop-blur-md">
+          {/* Top glowing ambient effect */}
+          <div className="absolute top-0 left-1/4 right-1/4 h-[2px] bg-gradient-to-r from-transparent via-olt-blue to-transparent shadow-[0_0_20px_rgba(0,170,255,0.8)]" />
+          
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-olt-blue/15 border border-olt-blue/30 rounded-xl text-olt-blue font-bold text-xs tracking-wider uppercase shadow-inner">
+              <Shield size={12} /> NOC SECURE GATEWAY
+            </div>
+            <h2 className="text-xl font-bold uppercase tracking-wider text-olt-text">ISP Device Manager</h2>
+            <p className="text-xs text-olt-muted">Enter administrative credentials to establish secure session</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            {loginError && (
+              <div className="p-3 bg-olt-red/10 border border-olt-red/30 rounded-lg text-xs text-olt-red font-semibold flex items-center gap-2 animate-pulse">
+                <AlertTriangle size={14} /> {loginError}
+              </div>
+            )}
+            
+            <div className="space-y-1">
+              <label className="block text-3xs font-bold text-olt-muted uppercase tracking-wider">Corporate Email Address</label>
+              <input 
+                type="email" 
+                value={loginForm.email} 
+                onChange={e => setLoginForm({ ...loginForm, email: e.target.value })} 
+                className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none focus:border-olt-blue/50 focus:ring-1 focus:ring-olt-blue/30 transition-all font-mono" 
+                placeholder="operator@isp.net"
+                required
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-3xs font-bold text-olt-muted uppercase tracking-wider">Security Access Password</label>
+              <input 
+                type="password" 
+                value={loginForm.password} 
+                onChange={e => setLoginForm({ ...loginForm, password: e.target.value })} 
+                className="w-full px-3 py-2 bg-olt-surface border border-olt-border rounded-lg text-sm text-olt-text focus:outline-none focus:border-olt-blue/50 focus:ring-1 focus:ring-olt-blue/30 transition-all font-mono" 
+                placeholder="••••••••"
+                required
+              />
+            </div>
+
+            <Button type="submit" loading={loginLoading} disabled={loginLoading} className="w-full font-bold uppercase py-2.5 mt-2">
+              <Check size={16} /> Authenticate Session
+            </Button>
+          </form>
+
+          {/* Credentials Helper Card */}
+          <div className="pt-4 border-t border-olt-border/30 mt-6 text-[11px] space-y-2">
+            <span className="font-bold text-olt-muted block uppercase tracking-wider text-3xs">Administrative Testing Credentials:</span>
+            <div className="grid grid-cols-2 gap-2 font-mono text-[10px] text-olt-muted bg-olt-surface/30 p-2 rounded-lg border border-olt-border/40">
+              <div>
+                <strong className="text-olt-blue">Admin role:</strong>
+                <div className="mt-0.5">admin@isp.net</div>
+                <div>Pass: admin123</div>
+              </div>
+              <div>
+                <strong className="text-olt-green">Engineer role:</strong>
+                <div className="mt-0.5">m.johnson@isp.net</div>
+                <div>Pass: engineer123</div>
+              </div>
+            </div>
+            <p className="text-3xs text-olt-muted/60 text-center italic mt-2">Secure encrypted channel active. All activities are recorded in the central transaction log.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-olt-bg text-olt-text grid-pattern flex flex-col justify-between font-sans selection:bg-olt-blue selection:text-white">
@@ -2934,13 +3137,20 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 border-l border-olt-border pl-4">
-              <div className="w-7 h-7 rounded-full bg-olt-blue/15 border border-olt-blue/40 flex items-center justify-center text-olt-blue font-bold text-xs uppercase shadow-inner">
-                SC
+              <div className="w-7 h-7 rounded-full bg-olt-blue/15 border border-olt-blue/40 flex items-center justify-center text-olt-blue font-bold text-[10px] uppercase shadow-inner" title={`${currentUser?.name} (${currentUser?.role})`}>
+                {currentUser?.name?.split(' ').map(n => n[0]).join('') || 'OP'}
               </div>
-              <div className="hidden lg:block text-left leading-tight">
-                <span className="block text-xs font-bold text-olt-text">{currentUser.name}</span>
-                <span className="block text-3xs text-olt-muted font-mono capitalize">{currentUser.role} mode</span>
+              <div className="hidden lg:block text-left leading-tight mr-1">
+                <span className="block text-xs font-bold text-olt-text">{currentUser?.name || 'Operator'}</span>
+                <span className="block text-3xs text-olt-muted font-mono capitalize">{currentUser?.role || 'Viewer'} mode</span>
               </div>
+              <button 
+                onClick={handleLogout} 
+                className="p-1.5 hover:bg-olt-surface hover:text-olt-red rounded-lg transition-colors text-olt-muted flex items-center justify-center"
+                title="Log Out of NOC Session"
+              >
+                <LogOut size={16} />
+              </button>
             </div>
           </div>
         </header>

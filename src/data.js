@@ -180,11 +180,11 @@ function generateConfigTemplates() {
 
 function generateUsers() {
   return [
-    { id: 1, name: 'Sarah Chen', email: 'sarah.chen@isp.net', role: 'admin', lastLogin: new Date(Date.now() - 3600000).toISOString(), status: 'active' },
-    { id: 2, name: 'Marcus Johnson', email: 'm.johnson@isp.net', role: 'engineer', lastLogin: new Date(Date.now() - 7200000).toISOString(), status: 'active' },
-    { id: 3, name: 'Emily Rodriguez', email: 'e.rodriguez@isp.net', role: 'engineer', lastLogin: new Date(Date.now() - 86400000).toISOString(), status: 'active' },
-    { id: 4, name: 'David Kim', email: 'd.kim@isp.net', role: 'viewer', lastLogin: new Date(Date.now() - 172800000).toISOString(), status: 'active' },
-    { id: 5, name: 'Admin User', email: 'admin@isp.net', role: 'admin', lastLogin: new Date(Date.now() - 300000).toISOString(), status: 'active' },
+    { id: 1, name: 'Sarah Chen', email: 'sarah.chen@isp.net', role: 'admin', lastLogin: new Date(Date.now() - 3600000).toISOString(), status: 'active', password: 'admin123' },
+    { id: 2, name: 'Marcus Johnson', email: 'm.johnson@isp.net', role: 'engineer', lastLogin: new Date(Date.now() - 7200000).toISOString(), status: 'active', password: 'engineer123' },
+    { id: 3, name: 'Emily Rodriguez', email: 'e.rodriguez@isp.net', role: 'engineer', lastLogin: new Date(Date.now() - 86400000).toISOString(), status: 'active', password: 'engineer123' },
+    { id: 4, name: 'David Kim', email: 'd.kim@isp.net', role: 'viewer', lastLogin: new Date(Date.now() - 172800000).toISOString(), status: 'active', password: 'viewer123' },
+    { id: 5, name: 'Admin User', email: 'admin@isp.net', role: 'admin', lastLogin: new Date(Date.now() - 300000).toISOString(), status: 'active', password: 'admin123' },
   ];
 }
 
