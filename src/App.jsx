@@ -448,6 +448,11 @@ export default function App() {
 
   // SNMP scan state
   const [syncingOltId, setSyncingOltId] = useState(null);
+  const [snmpPollModalOpen, setSnmpPollModalOpen] = useState(false);
+  const [snmpPollTitle, setSnmpPollTitle] = useState('');
+  const [snmpPollProgress, setSnmpPollProgress] = useState(0);
+  const [snmpPollLogs, setSnmpPollLogs] = useState([]);
+  const [snmpPollApplying, setSnmpPollApplying] = useState(false);
 
   // Settings state
   const [settings, setSettings] = useState({
@@ -469,6 +474,7 @@ export default function App() {
   // Visual terminal references
   const consoleBottomRef = useRef(null);
   const routerConsoleBottomRef = useRef(null);
+  const snmpConsoleBottomRef = useRef(null);
 
   // ==================== TOAST & BEEP HELPERS ====================
   const addToast = (message, type = 'success') => {
@@ -760,6 +766,9 @@ export default function App() {
 
       addToast(`OLT ${newOlt.name} added to NOC inventory`, 'success');
       logActivity('OLT Added', `Provisioned new multi-vendor OLT node: ${newOlt.name}`);
+
+      // Automatically trigger SNMP polling scan
+      syncOnusViaSnmp(newOltId, newOlt);
     }
     setOltModalOpen(false);
   };
@@ -779,62 +788,114 @@ export default function App() {
   };
 
   // ==================== SNMP ONU SCANNER (DYNAMIC DISCOVERY) ====================
-  const syncOnusViaSnmp = (oltId) => {
+  const syncOnusViaSnmp = (oltId, newOltObj = null) => {
     if (!checkPermission('Sync SNMP ONUs', 'engineer')) return;
-    const targetOlt = oltList.find(o => o.id === oltId);
+    const targetOlt = newOltObj || oltList.find(o => o.id === oltId);
     if (!targetOlt) return;
-    
-    setSyncingOltId(oltId);
-    addToast(`Initiating SNMP GetBulk query on ${targetOlt.ip}...`, 'info');
 
-    setTimeout(() => {
-      // Generate active ports data
-      const updatedPorts = Array.from({ length: targetOlt.portCount || 8 }, (_, i) => ({
-        id: `${oltId}-${i + 1}`,
-        portNumber: i + 1,
-        status: 'up',
-        onuCount: 3,
-        rxPower: (-20 - Math.random() * 5).toFixed(2),
-        txPower: '1.50',
-        bandwidth: Math.floor(Math.random() * 40) + 20
-      }));
+    setSnmpPollTitle(`SNMP Telemetry Polling: ${targetOlt.name} (${targetOlt.ip})`);
+    setSnmpPollProgress(0);
+    setSnmpPollLogs([]);
+    setSnmpPollModalOpen(true);
+    setSnmpPollApplying(true);
 
-      setPortsList(prev => prev.map(p => p.oltId === oltId ? { ...p, ports: updatedPorts } : p));
+    const vendorMibOids = {
+      VSOL: '1.3.6.1.4.1.37949',
+      CDATA: '1.3.6.1.4.1.34592',
+      BDCOM: '1.3.6.1.4.1.5504',
+      ZTE: '1.3.6.1.4.1.3902',
+      Huawei: '1.3.6.1.4.1.2011',
+      Nokia: '1.3.6.1.4.1.637'
+    };
 
-      // Generate simulated auto-discovered ONUs
-      const newOnus = Array.from({ length: 12 }, (_, idx) => {
-        const port = Math.floor(idx / 3) + 1;
-        const onuId = (idx % 3) + 1;
-        const rxPower = -17 - Math.random() * 7;
-        return {
-          id: `${oltId}-${port}-${onuId}`,
-          oltId,
-          port,
-          onuId,
-          serialNumber: generateSerialNumber(),
-          mac: generateMac(),
-          name: `ONT-${targetOlt.name}-${port}${onuId}`,
-          model: 'HG8245H',
-          status: 'online',
-          rxPower: rxPower.toFixed(2),
-          txPower: '1.80',
-          distance: Math.floor(rxPower * -10 + Math.random() * 50),
-          registeredAt: new Date().toISOString(),
-          lastActivity: new Date().toISOString(),
-        };
-      });
+    const enterpriseMib = vendorMibOids[targetOlt.vendor] || '1.3.6.1.4.1.9999';
 
-      setOnuList(prev => [...prev.filter(o => o.oltId !== oltId), ...newOnus]);
-      setOltList(prev => prev.map(o => o.id === oltId ? { ...o, onuCount: newOnus.length } : o));
-      
-      if (selectedOlt && selectedOlt.id === oltId) {
-        setSelectedOlt(prev => ({ ...prev, onuCount: newOnus.length }));
-      }
+    const steps = [
+      { prg: 5, log: `[SNMP Client] Opening UDP connection to SNMP agent at ${targetOlt.ip}:${settings.snmpPort || 161}...` },
+      { prg: 15, log: `[SNMP Client] Sent SNMP GET request (v2c, community: "${targetOlt.community || 'public'}") for sysDescr (1.3.6.1.2.1.1.1.0)...` },
+      { prg: 25, log: `[SNMP Client] sysDescr Response: ${targetOlt.vendor} ${targetOlt.model || 'Chassis'} - Software Version 4.2.1-Build-9082` },
+      { prg: 35, log: `[SNMP Client] Walking PON physical interface indexes (1.3.6.1.2.1.2.2.1.1)...` },
+      { prg: 45, log: `[SNMP Client] Discovered ${targetOlt.portCount || 8} active PON ports mapping OID index 1001-1008.` },
+      { prg: 60, log: `[SNMP Client] Walk Enterprise MIB for ONU registration list (${enterpriseMib}.3.1.2)...` },
+      { prg: 75, log: `[SNMP Client] Found registered customer ONUs on PON interfaces. Reading ONU serial numbers & MAC addresses...` },
+      { prg: 90, log: `[SNMP Client] Pulling ONU optical power levels (1.3.6.1.4.1.2011.2.3.1.2.1.1.9) and distance vectors...` },
+      { prg: 100, log: `[SNMP Client] Walk complete. Successfully registered and mapped telemetry entries in active database registry.` }
+    ];
 
-      setSyncingOltId(null);
-      addToast(`Successfully discovered ${newOnus.length} active ONUs via SNMP.`, 'success');
-      logActivity('SNMP Sync Complete', `Polled OLT ${targetOlt.name} and auto-discovered ${newOnus.length} active ONUs`);
-    }, 3000);
+    steps.forEach((step, idx) => {
+      setTimeout(() => {
+        setSnmpPollProgress(step.prg);
+        setSnmpPollLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step.log}`]);
+        if (step.prg === 100) {
+          setSnmpPollApplying(false);
+
+          // Generate 25-40 ONUs
+          const minOnus = 25;
+          const maxOnus = 40;
+          const onuCount = Math.floor(Math.random() * (maxOnus - minOnus + 1)) + minOnus;
+
+          const onuModels = {
+            VSOL: ['HM820', 'HM840', 'V2801', 'V2804'],
+            CDATA: ['FD601', 'FD701', 'FD801', 'OD-810'],
+            BDCOM: ['EP1110', 'EP2204', 'GP2608', 'GP2616'],
+            ZTE: ['F660', 'F660A', 'F680', 'ZXHN'],
+            Huawei: ['HG8245', 'HG8546', 'EG8145', 'EchoLife'],
+            Nokia: ['G-240G', 'G-240W', 'G-010G'],
+          };
+          const models = onuModels[targetOlt.vendor] || ['Generic-ONU'];
+
+          const newOnus = Array.from({ length: onuCount }, (_, idx) => {
+            const port = Math.floor(idx / 5) + 1; // spread across ports
+            const onuId = (idx % 5) + 1;
+            const rxPower = -16 - Math.random() * 9; // -16 to -25 dBm
+            return {
+              id: `${targetOlt.id}-${port}-${onuId}`,
+              oltId: targetOlt.id,
+              port,
+              onuId,
+              serialNumber: generateSerialNumber(),
+              mac: generateMac(),
+              name: `ONT-${targetOlt.name}-${port}${onuId.toString().padStart(2, '0')}`,
+              model: models[Math.floor(Math.random() * models.length)],
+              status: Math.random() > 0.05 ? 'online' : 'offline',
+              rxPower: rxPower.toFixed(2),
+              txPower: (1.5 + Math.random()).toFixed(2),
+              distance: Math.floor(rxPower * -10 + Math.random() * 50),
+              registeredAt: new Date(Date.now() - Math.random() * 86400000 * 10).toISOString(),
+              lastActivity: new Date().toISOString(),
+            };
+          });
+
+          // Generate physical ports configurations matching the portCount
+          const updatedPorts = Array.from({ length: targetOlt.portCount || 8 }, (_, i) => {
+            const portNum = i + 1;
+            const portOnus = newOnus.filter(o => o.port === portNum);
+            const status = portOnus.some(o => o.status === 'online') ? 'up' : 'down';
+            return {
+              id: `${targetOlt.id}-${portNum}`,
+              portNumber: portNum,
+              status,
+              onuCount: portOnus.length,
+              rxPower: status === 'up' ? (-20 - Math.random() * 5).toFixed(2) : null,
+              txPower: '1.50',
+              bandwidth: status === 'up' ? Math.floor(Math.random() * 40) + 20 : 0
+            };
+          });
+
+          setPortsList(prev => [...prev.filter(p => p.oltId !== targetOlt.id), { oltId: targetOlt.id, oltName: targetOlt.name, ports: updatedPorts }]);
+          setOnuList(prev => [...prev.filter(o => o.oltId !== targetOlt.id), ...newOnus]);
+          setOltList(prev => prev.map(o => o.id === targetOlt.id ? { ...o, onuCount: newOnus.length } : o));
+
+          // If detail view is open and it's the current selected OLT, update selectedOlt
+          if (selectedOlt && selectedOlt.id === targetOlt.id) {
+            setSelectedOlt(prev => ({ ...prev, onuCount: newOnus.length }));
+          }
+
+          addToast(`Successfully discovered ${newOnus.length} active ONUs via SNMP.`, 'success');
+          logActivity('SNMP Sync Complete', `Polled OLT ${targetOlt.name} and auto-discovered ${newOnus.length} active ONUs`);
+        }
+      }, (idx + 1) * 350);
+    });
   };
 
   // ==================== ROUTERS & SWITCHES ACTIONS ====================
@@ -882,6 +943,9 @@ export default function App() {
       setRouterList(prev => [...prev, newRouter]);
       addToast(`Registered Core Device: ${newRouter.name}`, 'success');
       logActivity('Core Device Provisioned', `Added new core chassis ${newRouter.name} (${newRouter.vendor}) to monitoring`);
+
+      // Automatically trigger SNMP polling scan
+      syncRouterInterfaces(newRouterId, newRouter);
     }
     setRouterModalOpen(false);
   };
@@ -899,57 +963,82 @@ export default function App() {
   };
 
   // ==================== SNMP INTERFACE SCANNER ====================
-  const syncRouterInterfaces = (routerId) => {
+  const syncRouterInterfaces = (routerId, newRouterObj = null) => {
     if (!checkPermission('Sync Core Interfaces via SNMP', 'engineer')) return;
-    const router = routerList.find(r => r.id === routerId);
+    const router = newRouterObj || routerList.find(r => r.id === routerId);
     if (!router) return;
 
-    setSyncingRouterId(routerId);
-    addToast(`Ingesting interfaces table from ${router.ip} via SNMP...`, 'info');
+    setSnmpPollTitle(`SNMP Interface Ingestion: ${router.name} (${router.ip})`);
+    setSnmpPollProgress(0);
+    setSnmpPollLogs([]);
+    setSnmpPollModalOpen(true);
+    setSnmpPollApplying(true);
 
-    setTimeout(() => {
-      let interfaces = [];
-      if (router.vendor === 'Juniper') {
-        interfaces = [
-          { name: 'xe-0/0/0', desc: 'Transit Uplink (Primary)', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 3800 + Math.floor(Math.random() * 500), txMbps: 1200 + Math.floor(Math.random() * 300) },
-          { name: 'xe-0/0/1', desc: 'Trunk to Core OLTs', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 900 + Math.floor(Math.random() * 200), txMbps: 2900 + Math.floor(Math.random() * 400) },
-          { name: 'xe-0/0/2', desc: 'Redundant Ring Loop DC2', speed: '10Gbps', admin: 'up', oper: 'down', rxMbps: 0, txMbps: 0 },
-          { name: 'ge-0/1/0', desc: 'OOB Out of Band Mgmt', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 2, txMbps: 4 }
-        ];
-      } else if (router.vendor === 'Cisco') {
-        interfaces = [
-          { name: 'GigabitEthernet1/0/1', desc: 'Admin Console Connection', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 3, txMbps: 6 },
-          { name: 'TenGigabitEthernet1/1/1', desc: 'L3 Uplink to BGP Edge', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 2100 + Math.floor(Math.random() * 300), txMbps: 1800 + Math.floor(Math.random() * 300) },
-          { name: 'TenGigabitEthernet1/1/2', desc: 'OLT Distribution Link', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 1100 + Math.floor(Math.random() * 200), txMbps: 2500 + Math.floor(Math.random() * 300) },
-          { name: 'TenGigabitEthernet1/1/3', desc: 'Backup Port (Disconnected)', speed: '10Gbps', admin: 'up', oper: 'down', rxMbps: 0, txMbps: 0 }
-        ];
-      } else {
-        // MikroTik or others
-        interfaces = [
-          { name: 'sfp-sfpplus1', desc: 'Master Uplink to xe-0/0/1', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 2800 + Math.floor(Math.random() * 400), txMbps: 900 + Math.floor(Math.random() * 200) },
-          { name: 'sfp-sfpplus2', desc: 'Aggregation Ring Link', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 1400 + Math.floor(Math.random() * 200), txMbps: 1400 + Math.floor(Math.random() * 200) },
-          { name: 'ether1', desc: 'Management Copper SFP', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 1, txMbps: 3 },
-          { name: 'ether2', desc: 'Local DHCP Server Interface', speed: '1Gbps', admin: 'up', oper: 'down', rxMbps: 0, txMbps: 0 },
-          { name: 'ether3', desc: 'Unused Trunk line', speed: '1Gbps', admin: 'down', oper: 'down', rxMbps: 0, txMbps: 0 }
-        ];
-      }
+    const steps = [
+      { prg: 5, log: `[SNMP Client] Establishing UDP session to SNMP agent at ${router.ip}:${settings.snmpPort || 161}...` },
+      { prg: 15, log: `[SNMP Client] Sent SNMP GET request for sysDescr (1.3.6.1.2.1.1.1.0)...` },
+      { prg: 25, log: `[SNMP Client] Response: ${router.vendor} ${router.model || 'Chassis'} - OS Version 12.3R1.5` },
+      { prg: 40, log: `[SNMP Client] Walk OID ifTable (1.3.6.1.2.1.2.2.1) for index mappings...` },
+      { prg: 60, log: `[SNMP Client] Querying interface names and administrative states...` },
+      { prg: 80, log: `[SNMP Client] Querying link speeds and operational status counters...` },
+      { prg: 95, log: `[SNMP Client] Reading interface traffic metrics and octets...` },
+      { prg: 100, log: `[SNMP Client] Interface scan complete. Successfully registered and mapped interface entries.` }
+    ];
 
-      const updatedRecord = {
-        deviceId: routerId,
-        interfaces
-      };
+    steps.forEach((step, idx) => {
+      setTimeout(() => {
+        setSnmpPollProgress(step.prg);
+        setSnmpPollLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step.log}`]);
+        if (step.prg === 100) {
+          setSnmpPollApplying(false);
 
-      setRouterInterfaces(prev => [...prev.filter(i => i.deviceId !== routerId), updatedRecord]);
-      setRouterList(prev => prev.map(r => r.id === routerId ? { ...r, interfacesCount: interfaces.length } : r));
+          let interfaces = [];
+          if (router.vendor === 'Juniper') {
+            interfaces = [
+              { name: 'xe-0/0/0', desc: 'Transit Uplink (Primary)', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 3800 + Math.floor(Math.random() * 500), txMbps: 1200 + Math.floor(Math.random() * 300) },
+              { name: 'xe-0/0/1', desc: 'Trunk to Core OLTs', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 900 + Math.floor(Math.random() * 200), txMbps: 2900 + Math.floor(Math.random() * 400) },
+              { name: 'xe-0/0/2', desc: 'Redundant Ring Loop DC2', speed: '10Gbps', admin: 'up', oper: 'down', rxMbps: 0, txMbps: 0 },
+              { name: 'ge-0/1/0', desc: 'OOB Out of Band Mgmt', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 2, txMbps: 4 },
+              { name: 'et-0/0/4', desc: '100G Backbone Ring To DC1', speed: '100Gbps', admin: 'up', oper: 'up', rxMbps: 24500 + Math.floor(Math.random() * 2000), txMbps: 18200 + Math.floor(Math.random() * 1500) },
+              { name: 'xe-0/0/3', desc: 'Local CDN cache aggregates', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 4200 + Math.floor(Math.random() * 400), txMbps: 6800 + Math.floor(Math.random() * 600) }
+            ];
+          } else if (router.vendor === 'Cisco') {
+            interfaces = [
+              { name: 'GigabitEthernet1/0/1', desc: 'Admin Console Connection', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 3, txMbps: 6 },
+              { name: 'TenGigabitEthernet1/1/1', desc: 'L3 Uplink to BGP Edge', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 2100 + Math.floor(Math.random() * 300), txMbps: 1800 + Math.floor(Math.random() * 300) },
+              { name: 'TenGigabitEthernet1/1/2', desc: 'OLT Distribution Link', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 1100 + Math.floor(Math.random() * 200), txMbps: 2500 + Math.floor(Math.random() * 300) },
+              { name: 'TenGigabitEthernet1/1/3', desc: 'Backup Port (Disconnected)', speed: '10Gbps', admin: 'up', oper: 'down', rxMbps: 0, txMbps: 0 },
+              { name: 'TenGigabitEthernet1/1/4', desc: 'Aggregation loop for POP distribution', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 4800 + Math.floor(Math.random() * 600), txMbps: 3900 + Math.floor(Math.random() * 500) }
+            ];
+          } else {
+            // MikroTik or others
+            interfaces = [
+              { name: 'sfp-sfpplus1', desc: 'Master Uplink to xe-0/0/1', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 2800 + Math.floor(Math.random() * 400), txMbps: 900 + Math.floor(Math.random() * 200) },
+              { name: 'sfp-sfpplus2', desc: 'Aggregation Ring Link', speed: '10Gbps', admin: 'up', oper: 'up', rxMbps: 1400 + Math.floor(Math.random() * 200), txMbps: 1400 + Math.floor(Math.random() * 200) },
+              { name: 'ether1', desc: 'Management Copper SFP', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 1, txMbps: 3 },
+              { name: 'ether2', desc: 'Local DHCP Server Interface', speed: '1Gbps', admin: 'up', oper: 'down', rxMbps: 0, txMbps: 0 },
+              { name: 'ether3', desc: 'Unused Trunk line', speed: '1Gbps', admin: 'down', oper: 'down', rxMbps: 0, txMbps: 0 },
+              { name: 'ether4', desc: 'Backup Agg Loop', speed: '1Gbps', admin: 'up', oper: 'up', rxMbps: 120 + Math.floor(Math.random() * 20), txMbps: 450 + Math.floor(Math.random() * 50) }
+            ];
+          }
 
-      if (selectedRouter && selectedRouter.id === routerId) {
-        setSelectedRouter(prev => ({ ...prev, interfacesCount: interfaces.length }));
-      }
+          const updatedRecord = {
+            deviceId: router.id,
+            interfaces
+          };
 
-      setSyncingRouterId(null);
-      addToast(`Discovered and registered ${interfaces.length} port interfaces.`, 'success');
-      logActivity('SNMP Interface Sync', `Queried core interfaces for router/switch: ${router.name}`);
-    }, 2500);
+          setRouterInterfaces(prev => [...prev.filter(i => i.deviceId !== router.id), updatedRecord]);
+          setRouterList(prev => prev.map(r => r.id === router.id ? { ...r, interfacesCount: interfaces.length } : r));
+
+          if (selectedRouter && selectedRouter.id === router.id) {
+            setSelectedRouter(prev => ({ ...prev, interfacesCount: interfaces.length }));
+          }
+
+          addToast(`Discovered and registered ${interfaces.length} port interfaces.`, 'success');
+          logActivity('SNMP Interface Sync', `Queried core interfaces for router/switch: ${router.name}`);
+        }
+      }, (idx + 1) * 350);
+    });
   };
 
   // ==================== INTERACTIVE PING TEST ====================
@@ -1137,6 +1226,12 @@ export default function App() {
       routerConsoleBottomRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [routerConsoleLogs]);
+
+  useEffect(() => {
+    if (snmpConsoleBottomRef.current) {
+      snmpConsoleBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [snmpPollLogs]);
 
   // ==================== ALARM ACTIONS ====================
   const acknowledgeAlarm = (id) => {
@@ -3293,6 +3388,35 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {/* SNMP Polling Status Bar Modal */}
+      <Modal isOpen={snmpPollModalOpen} onClose={() => !snmpPollApplying && setSnmpPollModalOpen(false)} title={snmpPollTitle} size="md">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-olt-muted font-semibold">SNMP Polling Progress:</span>
+            <span className="text-xs font-mono font-bold text-olt-blue">{snmpPollProgress}%</span>
+          </div>
+          <div className="h-2 bg-olt-surface rounded-full overflow-hidden border border-olt-border">
+            <div className="h-full bg-gradient-to-r from-olt-blue to-olt-green transition-all duration-300" style={{ width: `${snmpPollProgress}%` }} />
+          </div>
+
+          <div className="bg-black rounded-lg p-3 border border-olt-border font-mono text-2xs min-h-[160px] max-h-[250px] overflow-y-auto text-olt-green space-y-1">
+            {snmpPollLogs.map((log, i) => (
+              <div key={i} className="whitespace-pre-wrap">{log}</div>
+            ))}
+            {snmpPollApplying && (
+              <div className="flex items-center gap-1.5 text-olt-muted font-bold animate-pulse mt-1">
+                <RefreshCw size={10} className="animate-spin text-olt-blue" /> SNMP Polling MIB tables...
+              </div>
+            )}
+            <div ref={snmpConsoleBottomRef} />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button disabled={snmpPollApplying} onClick={() => setSnmpPollModalOpen(false)} variant="secondary">Close</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
