@@ -2999,7 +2999,7 @@ export default function App() {
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-olt-blue/15 border border-olt-blue/30 rounded-xl text-olt-blue font-bold text-xs tracking-wider uppercase shadow-inner">
               <Shield size={12} /> NOC SECURE GATEWAY
             </div>
-            <h2 className="text-xl font-bold uppercase tracking-wider text-olt-text">ISP Device Manager</h2>
+            <h2 className="text-xl font-bold uppercase tracking-wider text-olt-text">ISP-Device-Dashboard_BY_Sabuj</h2>
             <p className="text-xs text-olt-muted">Enter administrative credentials to establish secure session</p>
           </div>
 
@@ -3072,7 +3072,7 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2">
               <span className="p-1 bg-olt-blue/15 border border-olt-blue/30 rounded-lg text-olt-blue font-bold text-sm tracking-tight shadow-md">NOC</span>
-              <h1 className="font-bold text-sm tracking-wider uppercase font-sans hidden sm:block">Multi-Vendor Dashboard</h1>
+              <h1 className="font-bold text-sm tracking-wider uppercase font-sans hidden sm:block">ISP-Device-Dashboard_BY_Sabuj</h1>
             </div>
           </div>
 
