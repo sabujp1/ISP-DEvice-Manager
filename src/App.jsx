@@ -583,6 +583,158 @@ export default function App() {
     return () => clearInterval(timer);
   }, [oltList, onuList, alarmAudio]);
 
+  // ==================== SIMULATED SNMP TELEMETRY POLLING HOOK ====================
+  useEffect(() => {
+    if (oltList.length === 0 && routerList.length === 0) return;
+
+    // Use settings.pollingInterval (seconds) converted to milliseconds
+    const intervalMs = (settings.pollingInterval || 60) * 1000;
+
+    const timer = setInterval(() => {
+      // 1. Update OLTs
+      setOltList(prev => prev.map(olt => {
+        if (olt.status !== 'online') return olt;
+
+        // Fluctuate CPU between 10% and 85%
+        const cpuDelta = Math.floor(Math.random() * 7) - 3; // -3 to +3
+        let newCpu = (olt.cpu || 25) + cpuDelta;
+        if (newCpu < 10) newCpu = 10;
+        if (newCpu > 85) newCpu = 85;
+
+        // Fluctuate Memory between 15% and 85%
+        const memDelta = Math.floor(Math.random() * 5) - 2; // -2 to +2
+        let newMem = (olt.memory || 30) + memDelta;
+        if (newMem < 15) newMem = 15;
+        if (newMem > 85) newMem = 85;
+
+        // Fluctuate Temperature between 22°C and 45°C
+        let newTemp = olt.temperature || 28;
+        if (newTemp) {
+          const tempDelta = Math.floor(Math.random() * 3) - 1; // -1, 0, or +1
+          newTemp = newTemp + tempDelta;
+          if (newTemp < 20) newTemp = 20;
+          if (newTemp > 60) newTemp = 60;
+        }
+
+        // Increment Uptime by polling interval
+        const newUptime = (olt.uptime || 0) + (settings.pollingInterval || 60);
+
+        return {
+          ...olt,
+          cpu: newCpu,
+          memory: newMem,
+          temperature: newTemp,
+          uptime: newUptime
+        };
+      }));
+
+      // 2. Update Routers
+      setRouterList(prev => prev.map(router => {
+        if (router.status !== 'online') return router;
+
+        // Fluctuate CPU between 10% and 80%
+        const cpuDelta = Math.floor(Math.random() * 7) - 3;
+        let newCpu = (router.cpu || 20) + cpuDelta;
+        if (newCpu < 10) newCpu = 10;
+        if (newCpu > 80) newCpu = 80;
+
+        // Fluctuate Memory between 15% and 80%
+        const memDelta = Math.floor(Math.random() * 5) - 2;
+        let newMem = (router.memory || 30) + memDelta;
+        if (newMem < 15) newMem = 15;
+        if (newMem > 80) newMem = 80;
+
+        // Fluctuate Temp between 25°C and 65°C
+        let newTemp = router.temp || 35;
+        const tempDelta = Math.floor(Math.random() * 3) - 1;
+        newTemp = newTemp + tempDelta;
+        if (newTemp < 20) newTemp = 20;
+        if (newTemp > 65) newTemp = 65;
+
+        // Increment Uptime by polling interval
+        const newUptime = (router.uptime || 0) + (settings.pollingInterval || 60);
+
+        return {
+          ...router,
+          cpu: newCpu,
+          memory: newMem,
+          temp: newTemp,
+          uptime: newUptime
+        };
+      }));
+
+      // 3. Update ONUs (fluctuate rxPower and txPower)
+      setOnuList(prev => prev.map(onu => {
+        if (onu.status !== 'online') return onu;
+
+        const rxFloat = parseFloat(onu.rxPower);
+        if (isNaN(rxFloat) || rxFloat === 0) return onu;
+
+        const rxDelta = (Math.random() * 0.3 - 0.15); // -0.15 to +0.15 dBm
+        let newRx = rxFloat + rxDelta;
+        if (newRx > -10) newRx = -10;
+        if (newRx < -32) newRx = -32;
+
+        const txFloat = parseFloat(onu.txPower);
+        let newTx = onu.txPower;
+        if (!isNaN(txFloat) && txFloat !== 0) {
+          const txDelta = (Math.random() * 0.1 - 0.05); // -0.05 to +0.05 dBm
+          newTx = (txFloat + txDelta).toFixed(2);
+        }
+
+        return {
+          ...onu,
+          rxPower: newRx.toFixed(2),
+          txPower: newTx
+        };
+      }));
+
+      // 4. Update Router Interfaces
+      setRouterInterfaces(prev => prev.map(item => {
+        const updatedInterfaces = item.interfaces.map(intf => {
+          if (intf.oper !== 'up') return intf;
+
+          // Fluctuate rxMbps and txMbps by ±5% to ±10%
+          const pct = 0.05 + Math.random() * 0.05; // 5% to 10%
+          const rxSign = Math.random() > 0.5 ? 1 : -1;
+          const txSign = Math.random() > 0.5 ? 1 : -1;
+
+          let newRx = Math.round(intf.rxMbps * (1 + rxSign * pct));
+          let newTx = Math.round(intf.txMbps * (1 + txSign * pct));
+
+          if (intf.rxMbps > 0 && newRx < 1) newRx = 1;
+          if (intf.txMbps > 0 && newTx < 1) newTx = 1;
+
+          return {
+            ...intf,
+            rxMbps: newRx,
+            txMbps: newTx
+          };
+        });
+
+        return {
+          ...item,
+          interfaces: updatedInterfaces
+        };
+      }));
+
+      // Log SNMP Polling event in audit logs periodically
+      if (Math.random() < 0.1) {
+        const pollLog = {
+          id: Date.now(),
+          timestamp: new Date().toISOString(),
+          user: 'SNMP_POLLER',
+          action: 'SNMP Telemetry Polled',
+          detail: `Background SNMP scan completed. Synced active OLTs & Routers metrics.`
+        };
+        setActivityLog(prev => [pollLog, ...prev].slice(0, 100));
+      }
+
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [settings.pollingInterval, oltList.length, routerList.length]);
+
   // ==================== MEMOIZED DATA SELECTORS ====================
   const filteredOlts = useMemo(() => {
     return oltList.filter(olt => {
@@ -1082,7 +1234,19 @@ export default function App() {
                   serialNumber: 'V1912210063',
                   temperature: 28
                 }
-              : { ...o, onuCount: newOnus.length }
+              : {
+                  ...o,
+                  onuCount: newOnus.length,
+                  uptime: 3600 * (Math.floor(Math.random() * 500) + 100),
+                  cpu: Math.floor(Math.random() * 20) + 15,
+                  memory: Math.floor(Math.random() * 30) + 20,
+                  model: targetOlt.model || 'Chassis',
+                  mac: generateMac(),
+                  hardwareVersion: 'V1.2.0',
+                  softwareVersion: 'V4.2.1-Build-9082',
+                  serialNumber: generateSerialNumber(),
+                  temperature: Math.floor(Math.random() * 8) + 28
+                }
           ) : o));
 
           // If detail view is open and it's the current selected OLT, update selectedOlt
@@ -1102,7 +1266,19 @@ export default function App() {
                     serialNumber: 'V1912210063',
                     temperature: 28
                   }
-                : { ...prev, onuCount: newOnus.length }
+                : {
+                    ...prev,
+                    onuCount: newOnus.length,
+                    uptime: 3600 * (Math.floor(Math.random() * 500) + 100),
+                    cpu: Math.floor(Math.random() * 20) + 15,
+                    memory: Math.floor(Math.random() * 30) + 20,
+                    model: targetOlt.model || 'Chassis',
+                    mac: generateMac(),
+                    hardwareVersion: 'V1.2.0',
+                    softwareVersion: 'V4.2.1-Build-9082',
+                    serialNumber: generateSerialNumber(),
+                    temperature: Math.floor(Math.random() * 8) + 28
+                  }
             ));
           }
 
@@ -2111,7 +2287,8 @@ export default function App() {
     </div>
   );
 
-  function OLTDetailView({ olt, onBack }) {
+  function OLTDetailView({ olt: initialOlt, onBack }) {
+    const olt = oltList.find(o => o.id === initialOlt.id) || initialOlt;
     const oltPorts = portsList.find(p => p.oltId === olt.id)?.ports || [];
     const oltOnus = onuList.filter(o => o.oltId === olt.id);
     const [expandedPort, setExpandedPort] = useState(null);
@@ -2571,7 +2748,8 @@ export default function App() {
     </div>
   );
 
-  function RouterDetailView({ router, onBack }) {
+  function RouterDetailView({ router: initialRouter, onBack }) {
+    const router = routerList.find(r => r.id === initialRouter.id) || initialRouter;
     const devInterfaces = routerInterfaces.find(i => i.deviceId === router.id)?.interfaces || [];
 
     return (
