@@ -829,10 +829,15 @@ export default function App() {
         if (step.prg === 100) {
           setSnmpPollApplying(false);
 
-          // Generate 25-40 ONUs
-          const minOnus = 25;
-          const maxOnus = 40;
-          const onuCount = Math.floor(Math.random() * (maxOnus - minOnus + 1)) + minOnus;
+          // Generate active ports randomly (e.g. 70% active rate)
+          const activePorts = [];
+          for (let p = 1; p <= (targetOlt.portCount || 8); p++) {
+            if (Math.random() > 0.3) {
+              activePorts.push(p);
+            }
+          }
+          // If no ports were selected, force at least port 2
+          if (activePorts.length === 0) activePorts.push(2);
 
           const onuModels = {
             VSOL: ['HM820', 'HM840', 'V2801', 'V2804'],
@@ -844,26 +849,28 @@ export default function App() {
           };
           const models = onuModels[targetOlt.vendor] || ['Generic-ONU'];
 
-          const newOnus = Array.from({ length: onuCount }, (_, idx) => {
-            const port = Math.floor(idx / 5) + 1; // spread across ports
-            const onuId = (idx % 5) + 1;
-            const rxPower = -16 - Math.random() * 9; // -16 to -25 dBm
-            return {
-              id: `${targetOlt.id}-${port}-${onuId}`,
-              oltId: targetOlt.id,
-              port,
-              onuId,
-              serialNumber: generateSerialNumber(),
-              mac: generateMac(),
-              name: `ONT-${targetOlt.name}-${port}${onuId.toString().padStart(2, '0')}`,
-              model: models[Math.floor(Math.random() * models.length)],
-              status: Math.random() > 0.05 ? 'online' : 'offline',
-              rxPower: rxPower.toFixed(2),
-              txPower: (1.5 + Math.random()).toFixed(2),
-              distance: Math.floor(rxPower * -10 + Math.random() * 50),
-              registeredAt: new Date(Date.now() - Math.random() * 86400000 * 10).toISOString(),
-              lastActivity: new Date().toISOString(),
-            };
+          const newOnus = [];
+          activePorts.forEach(port => {
+            const onusOnThisPort = Math.floor(Math.random() * 8) + 4; // 4 to 11 ONUs per active port
+            for (let i = 1; i <= onusOnThisPort; i++) {
+              const rxPower = -16 - Math.random() * 9; // -16 to -25 dBm
+              newOnus.push({
+                id: `${targetOlt.id}-${port}-${i}`,
+                oltId: targetOlt.id,
+                port,
+                onuId: i,
+                serialNumber: generateSerialNumber(),
+                mac: generateMac(),
+                name: `ONT-${targetOlt.name}-${port}${i.toString().padStart(2, '0')}`,
+                model: models[Math.floor(Math.random() * models.length)],
+                status: Math.random() > 0.05 ? 'online' : 'offline',
+                rxPower: rxPower.toFixed(2),
+                txPower: (1.5 + Math.random()).toFixed(2),
+                distance: Math.floor(rxPower * -10 + Math.random() * 50),
+                registeredAt: new Date(Date.now() - Math.random() * 86400000 * 10).toISOString(),
+                lastActivity: new Date().toISOString(),
+              });
+            }
           });
 
           // Generate physical ports configurations matching the portCount
