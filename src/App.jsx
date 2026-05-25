@@ -1162,11 +1162,8 @@ export default function App() {
           } else {
             const activePorts = [];
             for (let p = 1; p <= (targetOlt.portCount || 8); p++) {
-              if (Math.random() > 0.3) {
-                activePorts.push(p);
-              }
+              activePorts.push(p);
             }
-            if (activePorts.length === 0) activePorts.push(2);
 
             const onuModels = {
               CDATA: ['FD601', 'FD701', 'FD801', 'OD-810'],
@@ -1205,7 +1202,13 @@ export default function App() {
           const updatedPorts = Array.from({ length: targetOlt.portCount || 8 }, (_, i) => {
             const portNum = i + 1;
             const portOnus = newOnus.filter(o => o.port === portNum);
-            const status = portOnus.some(o => o.status === 'online') ? 'up' : 'down';
+            
+            // Set port status: for VSOL, match the screenshot (PON1, 3, 5, 7 down; PON2, 4, 6, 8 up).
+            // For other vendors, default all ports to 'up'.
+            const status = targetOlt.vendor === 'VSOL'
+              ? ([2, 4, 6, 8].includes(portNum) ? 'up' : 'down')
+              : 'up';
+
             return {
               id: `${targetOlt.id}-${portNum}`,
               portNumber: portNum,
