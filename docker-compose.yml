@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  olt-manager:
+    build: .
+    container_name: olt-manager
+    ports:
+      - "80:80"
+    restart: always

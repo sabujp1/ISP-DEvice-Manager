@@ -1,0 +1,201 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --olt-bg: #0d1117;
+  --olt-panel: #161b22;
+  --olt-surface: #21262d;
+  --olt-border: #30363d;
+  --olt-text: #e6edf3;
+  --olt-muted: #8b949e;
+  --olt-green: #00ff88;
+  --olt-blue: #00aaff;
+  --olt-amber: #ffaa00;
+  --olt-red: #ff4444;
+  --olt-purple: #a855f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--olt-bg);
+  color: var(--olt-text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--olt-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--olt-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--olt-muted);
+}
+
+/* Grid pattern background */
+.grid-pattern {
+  background-image: 
+    linear-gradient(rgba(48, 54, 61, 0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(48, 54, 61, 0.3) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Scanline effect */
+.scanlines::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.1) 2px,
+    rgba(0, 0, 0, 0.1) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Pulse animation for online status */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px currentColor;
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 12px currentColor;
+    opacity: 0.8;
+  }
+}
+
+.pulse-online {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Alarm ticker scroll */
+@keyframes ticker-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.ticker-scroll {
+  animation: ticker-scroll 40s linear infinite;
+}
+
+.ticker-scroll:hover {
+  animation-play-state: paused;
+}
+
+/* Signal bars animation */
+@keyframes signal-bounce {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.7); }
+}
+
+.signal-bar {
+  animation: signal-bounce 1s ease-in-out infinite;
+}
+
+.signal-bar:nth-child(1) { animation-delay: 0s; }
+.signal-bar:nth-child(2) { animation-delay: 0.2s; }
+.signal-bar:nth-child(3) { animation-delay: 0.4s; }
+.signal-bar:nth-child(4) { animation-delay: 0.6s; }
+
+/* Table row hover effect */
+.table-row-hover {
+  transition: all 0.15s ease;
+}
+
+.table-row-hover:hover {
+  background-color: rgba(0, 255, 136, 0.05);
+  border-left: 3px solid var(--olt-green);
+}
+
+/* Glass effect */
+.glass {
+  backdrop-filter: blur(10px);
+  background-color: rgba(22, 27, 34, 0.8);
+}
+
+/* Data flow animation */
+@keyframes data-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.data-flow {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 170, 255, 0.3) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: data-flow 2s linear infinite;
+}
+
+/* Recharts custom styles */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: var(--olt-border);
+}
+
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+
+.custom-tooltip {
+  background-color: var(--olt-surface) !important;
+  border: 1px solid var(--olt-border) !important;
+  border-radius: 8px !important;
+  padding: 12px !important;
+}
+
+/* Loading skeleton */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--olt-surface) 25%,
+    var(--olt-border) 50%,
+    var(--olt-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
