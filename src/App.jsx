@@ -889,13 +889,19 @@ export default function App() {
       const newOlt = {
         ...oltForm,
         id: newOltId,
-        status: 'online',
-        uptime: 3600 * Math.floor(Math.random() * 24 + 1),
+        status: 'pending',
+        uptime: null,
         onuCount: 0,
         alarmCount: 0,
         portCount: 8,
-        cpu: 15,
-        memory: 30
+        cpu: null,
+        memory: null,
+        temperature: null,
+        serialNumber: null,
+        hardwareVersion: null,
+        softwareVersion: null,
+        mac: null,
+        snmpError: null,
       };
 
       // Generate empty ports config
@@ -939,357 +945,148 @@ export default function App() {
     }
   };
 
-  // ==================== SNMP ONU SCANNER (DYNAMIC DISCOVERY) ====================
-  const syncOnusViaSnmp = (oltId, newOltObj = null) => {
+  // ==================== REAL SNMP ONU SCANNER ====================
+  const syncOnusViaSnmp = async (oltId, newOltObj = null) => {
     if (!checkPermission('Sync SNMP ONUs', 'engineer')) return;
     const targetOlt = newOltObj || oltList.find(o => o.id === oltId);
     if (!targetOlt) return;
 
-    setSnmpPollTitle(`SNMP Telemetry Polling: ${targetOlt.name} (${targetOlt.ip})`);
+    const appendLog = (line) => setSnmpPollLogs(prev => [...prev, line]);
+
+    setSnmpPollTitle(`SNMP Polling: ${targetOlt.name} (${targetOlt.ip})`);
     setSnmpPollProgress(0);
     setSnmpPollLogs([]);
     setSnmpPollModalOpen(true);
     setSnmpPollApplying(true);
 
-    const vendorMibOids = {
-      VSOL: '1.3.6.1.4.1.37949',
-      CDATA: '1.3.6.1.4.1.34592',
-      BDCOM: '1.3.6.1.4.1.5504',
-      ZTE: '1.3.6.1.4.1.3902',
-      Huawei: '1.3.6.1.4.1.2011',
-      Nokia: '1.3.6.1.4.1.637'
+    appendLog(`[${new Date().toLocaleTimeString()}] Connecting to SNMP backend proxy...`);
+    setSnmpPollProgress(5);
+
+    let result;
+    try {
+      const resp = await fetch('/api/snmp/poll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: targetOlt.ip,
+          community: targetOlt.community || settings.snmpCommunity || 'public',
+          port: targetOlt.port || settings.snmpPort || 161,
+          vendor: targetOlt.vendor,
+          deviceType: 'olt',
+        }),
+      });
+      result = await resp.json();
+    } catch (fetchErr) {
+      appendLog(`[${new Date().toLocaleTimeString()}] ❌ FATAL: Cannot reach SNMP backend service.`);
+      appendLog(`[${new Date().toLocaleTimeString()}]    → Is the backend server running? (node server.js on port 5000)`);
+      appendLog(`[${new Date().toLocaleTimeString()}]    → Error: ${fetchErr.message}`);
+      setSnmpPollProgress(100);
+      setSnmpPollApplying(false);
+      setOltList(prev => prev.map(o => o.id === targetOlt.id ? { ...o, status: 'offline', snmpError: fetchErr.message } : o));
+      addToast('SNMP backend not reachable. Is server.js running?', 'danger');
+      return;
+    }
+
+    // Stream every log line from the backend into the console
+    const serverLogs = result.logs || [];
+    let logProgress = 10;
+    const progressStep = Math.floor(90 / Math.max(serverLogs.length, 1));
+    for (const line of serverLogs) {
+      appendLog(line);
+      logProgress = Math.min(logProgress + progressStep, 95);
+      setSnmpPollProgress(logProgress);
+      await new Promise(r => setTimeout(r, 30));
+    }
+
+    setSnmpPollProgress(100);
+    setSnmpPollApplying(false);
+
+    if (!result.success) {
+      // SNMP failed — mark device unreachable and show error
+      appendLog(`[${new Date().toLocaleTimeString()}] ❌ SNMP FAILED: ${result.error}`);
+      appendLog(`[${new Date().toLocaleTimeString()}]    Device unreachable or credentials wrong.`);
+      setOltList(prev => prev.map(o => o.id === targetOlt.id
+        ? { ...o, status: 'offline', snmpError: result.error }
+        : o
+      ));
+      addToast(`SNMP failed for ${targetOlt.name}: ${result.error}`, 'danger');
+      logActivity('SNMP Failed', `Cannot poll ${targetOlt.name}: ${result.error}`);
+      return;
+    }
+
+    // ── SUCCESS: use real data from device ──────────────────────────────────
+    appendLog(`[${new Date().toLocaleTimeString()}] ✅ SNMP poll successful. Applying real device data...`);
+
+    const d = result.data;
+
+    // Build real ports from actual interfaces returned
+    const ponInterfaces = d.interfaces.filter(i =>
+      /pon|gpon|epon|xgspon|gei|gpon-olt/i.test(i.name)
+    );
+    // If no PON-specific interfaces found, use all non-management interfaces
+    const portInterfaces = ponInterfaces.length > 0 ? ponInterfaces : d.interfaces.filter(i =>
+      !/mgmt|manage|loopback|lo\d|vlan|null/i.test(i.name)
+    );
+
+    const updatedPorts = portInterfaces.map((intf, i) => ({
+      id: `${targetOlt.id}-${i + 1}`,
+      portNumber: i + 1,
+      portName: intf.name,
+      status: intf.oper === 'up' ? 'up' : 'down',
+      onuCount: 0, // real ONU walk would require enterprise OID walk per vendor
+      rxPower: intf.oper === 'up' ? null : null,
+      txPower: null,
+      bandwidth: intf.rxMbps + intf.txMbps,
+      desc: intf.desc,
+      speed: intf.speed,
+    }));
+
+    // If device returns no recognizable PON ports, still create entries from portCount
+    const finalPorts = updatedPorts.length > 0
+      ? updatedPorts
+      : Array.from({ length: targetOlt.portCount || 8 }, (_, i) => ({
+          id: `${targetOlt.id}-${i + 1}`,
+          portNumber: i + 1,
+          portName: `PON${i + 1}`,
+          status: 'up',
+          onuCount: 0,
+          rxPower: null,
+          txPower: null,
+          bandwidth: 0,
+        }));
+
+    setPortsList(prev => [...prev.filter(p => p.oltId !== targetOlt.id), {
+      oltId: targetOlt.id,
+      oltName: targetOlt.name,
+      ports: finalPorts,
+    }]);
+
+    // Apply ALL real telemetry to OLT record — nothing is hardcoded
+    const realTelemetry = {
+      status: 'online',
+      snmpError: null,
+      sysName: d.sysName,
+      sysDescr: d.sysDescr,
+      uptime: d.uptime,
+      cpu: d.cpu,
+      memory: d.memory,
+      temperature: d.temperature,
+      serialNumber: d.serialNumber,
+      hardwareVersion: d.hardwareVersion,
+      softwareVersion: d.softwareVersion,
+      mac: d.mac,
+      portCount: finalPorts.length || targetOlt.portCount,
+      onuCount: 0,
+      lastPolled: new Date().toISOString(),
     };
 
-    const enterpriseMib = vendorMibOids[targetOlt.vendor] || '1.3.6.1.4.1.9999';
+    setOltList(prev => prev.map(o => o.id === targetOlt.id ? { ...o, ...realTelemetry } : o));
+    if (selectedOlt && selectedOlt.id === targetOlt.id) {
+      setSelectedOlt(prev => ({ ...prev, ...realTelemetry }));
+    }
 
-    const steps = targetOlt.vendor === 'VSOL' ? [
-      { prg: 5, log: `[SNMP Client] Opening UDP connection to SNMP agent at ${targetOlt.ip}:${settings.snmpPort || 161}...` },
-      { prg: 15, log: `[SNMP Client] Sent SNMP GET request (v2c, community: "${targetOlt.community || 'public'}") for sysDescr (1.3.6.1.2.1.1.1.0)...` },
-      { prg: 25, log: `[SNMP Client] Response: sysDescr=VSOL GPON-OLT (HW: V2.1.8, SW: V2.3.1R, SN: V1912210063)` },
-      { prg: 35, log: `[SNMP Client] Walking PON physical interfaces (1.3.6.1.2.1.2.2.1.1)...` },
-      { prg: 45, log: `[SNMP Client] Discovered 8 GPON ports (PON1-PON8).` },
-      { prg: 60, log: `[SNMP Client] Walk Enterprise MIB for ONU registration list (${enterpriseMib}.3.1.2)...` },
-      { prg: 75, log: `[SNMP Client] Discovered 173 registered ONUs: PON1: 0, PON2: 62, PON3: 0, PON4: 48, PON5: 0, PON6: 28, PON7: 0, PON8: 35.` },
-      { prg: 90, log: `[SNMP Client] Querying optical rxPower, distances, and auth states for 173 ONUs...` },
-      { prg: 100, log: `[SNMP Client] Walk complete. JessoreIT-GPON telemetry table synced successfully.` }
-    ] : [
-      { prg: 5, log: `[SNMP Client] Opening UDP connection to SNMP agent at ${targetOlt.ip}:${settings.snmpPort || 161}...` },
-      { prg: 15, log: `[SNMP Client] Sent SNMP GET request (v2c, community: "${targetOlt.community || 'public'}") for sysDescr (1.3.6.1.2.1.1.1.0)...` },
-      { prg: 25, log: `[SNMP Client] sysDescr Response: ${targetOlt.vendor} ${targetOlt.model || 'Chassis'} - Software Version 4.2.1-Build-9082` },
-      { prg: 35, log: `[SNMP Client] Walking PON physical interface indexes (1.3.6.1.2.1.2.2.1.1)...` },
-      { prg: 45, log: `[SNMP Client] Discovered ${targetOlt.portCount || 8} active PON ports mapping OID index 1001-1008.` },
-      { prg: 60, log: `[SNMP Client] Walk Enterprise MIB for ONU registration list (${enterpriseMib}.3.1.2)...` },
-      { prg: 75, log: `[SNMP Client] Found registered customer ONUs on PON interfaces. Reading ONU serial numbers & MAC addresses...` },
-      { prg: 90, log: `[SNMP Client] Pulling ONU optical power levels (1.3.6.1.4.1.2011.2.3.1.2.1.1.9) and distance vectors...` },
-      { prg: 100, log: `[SNMP Client] Walk complete. Successfully registered and mapped telemetry entries in active database registry.` }
-    ];
-
-    steps.forEach((step, idx) => {
-      setTimeout(() => {
-        setSnmpPollProgress(step.prg);
-        setSnmpPollLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step.log}`]);
-        if (step.prg === 100) {
-          setSnmpPollApplying(false);
-
-          let newOnus = [];
-          if (targetOlt.vendor === 'VSOL') {
-            const port8OnusData = [
-              { status: 'online', model: 'EG8310M', sn: 'HWTCA1D20CA1' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B74A' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTC3933AC9B' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTCOF5BFD7B' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC030925A0' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC10123B50' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC28CDFB9F' },
-              { status: 'online', model: 'HG8010H', sn: 'HWTC73A8FD1A' },
-              { status: 'online', model: 'GP1702-1Gv4', sn: 'BDCM6BC4813F' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B74C' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B746' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC377AD892' },
-              { status: 'online', model: 'P3', sn: 'FHTCAF9C0EE8' },
-              { status: 'online', model: '1GEXPONONU', sn: 'HWTC0420CCD0' },
-              { status: 'online', model: 'XPON-2FE1P', sn: 'HWTCFB8D8C9C' },
-              { status: 'online', model: 'XPONONU', sn: 'HWTC11157E40' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B720' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC2BA22A2B' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTCD7CF269E' },
-              { status: 'offline', model: 'unknown', sn: 'VSOL0087B5F1' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTC8EBA1A3A' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC5A823E9E' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTCOB7E5F9E' },
-              { status: 'online', model: 'TX-6610', sn: 'TPLGC4F4A987' },
-              // remaining items to reach 35
-              { status: 'online', model: 'EG8310M', sn: 'HWTCA10A92A1' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B89B' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC8372A732' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTC3944AB89' },
-              { status: 'online', model: '110F', sn: 'HWTC99F8D88C' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B91F' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC18D72A99' },
-              { status: 'online', model: 'EG8145V5', sn: 'HWTCAF892A02' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTC92A8FD77' },
-              { status: 'offline', model: 'unknown', sn: 'VSOL0092AB90' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B108' }
-            ];
-
-            const port2OnusData = [
-              { status: 'offline', model: 'unknown', sn: 'MONU0017C941' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTACC17BE1C' },
-              { status: 'offline', model: 'unknown', sn: 'HWTC73F7192E' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTC1428BAC4' },
-              { status: 'online', model: 'HSGQ-G/E100V1.0', sn: 'XPON19094045' },
-              { status: 'online', model: 'XPONONU', sn: 'HWTC11157E80' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B6F0' },
-              { status: 'online', model: 'FD511G-X-F680', sn: 'D0116A17BB57' },
-              { status: 'online', model: 'G107-CFV1.0', sn: 'XPONEC35B784' },
-              { status: 'online', model: 'HG8120C', sn: 'HWTECE20C712B' },
-              { status: 'online', model: 'HG8010H', sn: 'HWTC7412059F' },
-              { status: 'online', model: 'HG8310M', sn: 'HWTC57498376' },
-              { status: 'online', model: 'FD511G-X-F680', sn: 'D0116A17E08A' },
-              { status: 'online', model: 'EG8310M', sn: 'HWTCA10E815A' },
-              { status: 'online', model: '110F', sn: 'HWTC87D66D16' },
-              { status: 'online', model: '110F', sn: 'HWTC15B2A91C' },
-              { status: 'online', model: '1GEXPONONU', sn: 'HWTC1C56BFC1' },
-              { status: 'online', model: 'FD511G-G-Z360', sn: 'DD58E63615E3' },
-            ];
-
-            // Add Port 8 ONUs
-            port8OnusData.forEach((item, index) => {
-              const rxPower = item.status === 'online' ? -15 - Math.random() * 8 : 0.00;
-              newOnus.push({
-                id: `${targetOlt.id}-8-${index + 1}`,
-                oltId: targetOlt.id,
-                port: 8,
-                onuId: index + 1,
-                serialNumber: item.sn,
-                mac: generateMac(),
-                name: `ONT-${targetOlt.name}-8${(index + 1).toString().padStart(2, '0')}`,
-                model: item.model,
-                status: item.status,
-                rxPower: rxPower ? rxPower.toFixed(2) : '0.00',
-                txPower: item.status === 'online' ? (1.5 + Math.random()).toFixed(2) : '0.00',
-                distance: item.status === 'online' ? Math.floor(Math.abs(rxPower) * 10 + Math.random() * 50) : 0,
-                registeredAt: new Date(Date.now() - Math.random() * 86400000 * 20).toISOString(),
-                lastActivity: item.status === 'online' ? new Date().toISOString() : null,
-              });
-            });
-
-            // Add Port 2 ONUs (18 from screenshot, plus 44 others to reach 62)
-            port2OnusData.forEach((item, index) => {
-              const rxPower = item.status === 'online' ? -15 - Math.random() * 8 : 0.00;
-              newOnus.push({
-                id: `${targetOlt.id}-2-${index + 1}`,
-                oltId: targetOlt.id,
-                port: 2,
-                onuId: index + 1,
-                serialNumber: item.sn,
-                mac: generateMac(),
-                name: `ONT-${targetOlt.name}-2${(index + 1).toString().padStart(2, '0')}`,
-                model: item.model,
-                status: item.status,
-                rxPower: rxPower ? rxPower.toFixed(2) : '0.00',
-                txPower: item.status === 'online' ? (1.5 + Math.random()).toFixed(2) : '0.00',
-                distance: item.status === 'online' ? Math.floor(Math.abs(rxPower) * 10 + Math.random() * 50) : 0,
-                registeredAt: new Date(Date.now() - Math.random() * 86400000 * 20).toISOString(),
-                lastActivity: item.status === 'online' ? new Date().toISOString() : null,
-              });
-            });
-
-            for (let i = 19; i <= 62; i++) {
-              const isOnline = Math.random() > 0.15;
-              const rxPower = isOnline ? -16 - Math.random() * 9 : 0.00;
-              newOnus.push({
-                id: `${targetOlt.id}-2-${i}`,
-                oltId: targetOlt.id,
-                port: 2,
-                onuId: i,
-                serialNumber: generateSerialNumber(),
-                mac: generateMac(),
-                name: `ONT-${targetOlt.name}-2${i.toString().padStart(2, '0')}`,
-                model: ['HG8310M', 'EG8310M', 'G107-CFV1.0', '110F', 'unknown'][Math.floor(Math.random() * 5)],
-                status: isOnline ? 'online' : 'offline',
-                rxPower: rxPower ? rxPower.toFixed(2) : '0.00',
-                txPower: isOnline ? (1.5 + Math.random()).toFixed(2) : '0.00',
-                distance: isOnline ? Math.floor(Math.abs(rxPower) * 10 + Math.random() * 50) : 0,
-                registeredAt: new Date(Date.now() - Math.random() * 86400000 * 20).toISOString(),
-                lastActivity: isOnline ? new Date().toISOString() : null,
-              });
-            }
-
-            // Fill Port 4 (48 ONUs)
-            for (let i = 1; i <= 48; i++) {
-              const isOnline = Math.random() > 0.1;
-              const rxPower = isOnline ? -16 - Math.random() * 9 : 0.00;
-              newOnus.push({
-                id: `${targetOlt.id}-4-${i}`,
-                oltId: targetOlt.id,
-                port: 4,
-                onuId: i,
-                serialNumber: generateSerialNumber(),
-                mac: generateMac(),
-                name: `ONT-${targetOlt.name}-4${i.toString().padStart(2, '0')}`,
-                model: ['HG8310M', 'EG8310M', 'G107-CFV1.0', '110F', 'unknown'][Math.floor(Math.random() * 5)],
-                status: isOnline ? 'online' : 'offline',
-                rxPower: rxPower ? rxPower.toFixed(2) : '0.00',
-                txPower: isOnline ? (1.5 + Math.random()).toFixed(2) : '0.00',
-                distance: isOnline ? Math.floor(Math.abs(rxPower) * 10 + Math.random() * 50) : 0,
-                registeredAt: new Date(Date.now() - Math.random() * 86400000 * 20).toISOString(),
-                lastActivity: isOnline ? new Date().toISOString() : null,
-              });
-            }
-
-            // Fill Port 6 (28 ONUs)
-            for (let i = 1; i <= 28; i++) {
-              const isOnline = Math.random() > 0.12;
-              const rxPower = isOnline ? -16 - Math.random() * 9 : 0.00;
-              newOnus.push({
-                id: `${targetOlt.id}-6-${i}`,
-                oltId: targetOlt.id,
-                port: 6,
-                onuId: i,
-                serialNumber: generateSerialNumber(),
-                mac: generateMac(),
-                name: `ONT-${targetOlt.name}-6${i.toString().padStart(2, '0')}`,
-                model: ['HG8310M', 'EG8310M', 'G107-CFV1.0', '110F', 'unknown'][Math.floor(Math.random() * 5)],
-                status: isOnline ? 'online' : 'offline',
-                rxPower: rxPower ? rxPower.toFixed(2) : '0.00',
-                txPower: isOnline ? (1.5 + Math.random()).toFixed(2) : '0.00',
-                distance: isOnline ? Math.floor(Math.abs(rxPower) * 10 + Math.random() * 50) : 0,
-                registeredAt: new Date(Date.now() - Math.random() * 86400000 * 20).toISOString(),
-                lastActivity: isOnline ? new Date().toISOString() : null,
-              });
-            }
-          } else {
-            const activePorts = [];
-            for (let p = 1; p <= (targetOlt.portCount || 8); p++) {
-              activePorts.push(p);
-            }
-
-            const onuModels = {
-              CDATA: ['FD601', 'FD701', 'FD801', 'OD-810'],
-              BDCOM: ['EP1110', 'EP2204', 'GP2608', 'GP2616'],
-              ZTE: ['F660', 'F660A', 'F680', 'ZXHN'],
-              Huawei: ['HG8245', 'HG8546', 'EG8145', 'EchoLife'],
-              Nokia: ['G-240G', 'G-240W', 'G-010G'],
-            };
-            const models = onuModels[targetOlt.vendor] || ['Generic-ONU'];
-
-            activePorts.forEach(port => {
-              const onusOnThisPort = Math.floor(Math.random() * 8) + 4;
-              for (let i = 1; i <= onusOnThisPort; i++) {
-                const rxPower = -16 - Math.random() * 9;
-                newOnus.push({
-                  id: `${targetOlt.id}-${port}-${i}`,
-                  oltId: targetOlt.id,
-                  port,
-                  onuId: i,
-                  serialNumber: generateSerialNumber(),
-                  mac: generateMac(),
-                  name: `ONT-${targetOlt.name}-${port}${i.toString().padStart(2, '0')}`,
-                  model: models[Math.floor(Math.random() * models.length)],
-                  status: Math.random() > 0.05 ? 'online' : 'offline',
-                  rxPower: rxPower.toFixed(2),
-                  txPower: (1.5 + Math.random()).toFixed(2),
-                  distance: Math.floor(rxPower * -10 + Math.random() * 50),
-                  registeredAt: new Date(Date.now() - Math.random() * 86400000 * 10).toISOString(),
-                  lastActivity: new Date().toISOString(),
-                });
-              }
-            });
-          }
-
-          // Generate physical ports configurations matching the portCount
-          const updatedPorts = Array.from({ length: targetOlt.portCount || 8 }, (_, i) => {
-            const portNum = i + 1;
-            const portOnus = newOnus.filter(o => o.port === portNum);
-            
-            // Set port status: for VSOL, match the screenshot (PON1, 3, 5, 7 down; PON2, 4, 6, 8 up).
-            // For other vendors, default all ports to 'up'.
-            const status = targetOlt.vendor === 'VSOL'
-              ? ([2, 4, 6, 8].includes(portNum) ? 'up' : 'down')
-              : 'up';
-
-            return {
-              id: `${targetOlt.id}-${portNum}`,
-              portNumber: portNum,
-              status,
-              onuCount: portOnus.length,
-              rxPower: status === 'up' ? (-20 - Math.random() * 5).toFixed(2) : null,
-              txPower: '1.50',
-              bandwidth: status === 'up' ? Math.floor(Math.random() * 40) + 20 : 0
-            };
-          });
-
-          setPortsList(prev => [...prev.filter(p => p.oltId !== targetOlt.id), { oltId: targetOlt.id, oltName: targetOlt.name, ports: updatedPorts }]);
-          setOnuList(prev => [...prev.filter(o => o.oltId !== targetOlt.id), ...newOnus]);
-          setOltList(prev => prev.map(o => o.id === targetOlt.id ? (
-            targetOlt.vendor === 'VSOL'
-              ? {
-                  ...o,
-                  onuCount: newOnus.length,
-                  uptime: 4934880,
-                  cpu: 28,
-                  memory: 25,
-                  model: 'GPON-OLT',
-                  mac: '80:14:A8:FF:FD:86',
-                  hardwareVersion: 'V2.1.8',
-                  softwareVersion: 'V2.3.1R',
-                  serialNumber: 'V1912210063',
-                  temperature: 28
-                }
-              : {
-                  ...o,
-                  onuCount: newOnus.length,
-                  uptime: 3600 * (Math.floor(Math.random() * 500) + 100),
-                  cpu: Math.floor(Math.random() * 20) + 15,
-                  memory: Math.floor(Math.random() * 30) + 20,
-                  model: targetOlt.model || 'Chassis',
-                  mac: generateMac(),
-                  hardwareVersion: 'V1.2.0',
-                  softwareVersion: 'V4.2.1-Build-9082',
-                  serialNumber: generateSerialNumber(),
-                  temperature: Math.floor(Math.random() * 8) + 28
-                }
-          ) : o));
-
-          // If detail view is open and it's the current selected OLT, update selectedOlt
-          if (selectedOlt && selectedOlt.id === targetOlt.id) {
-            setSelectedOlt(prev => (
-              targetOlt.vendor === 'VSOL'
-                ? {
-                    ...prev,
-                    onuCount: newOnus.length,
-                    uptime: 4934880,
-                    cpu: 28,
-                    memory: 25,
-                    model: 'GPON-OLT',
-                    mac: '80:14:A8:FF:FD:86',
-                    hardwareVersion: 'V2.1.8',
-                    softwareVersion: 'V2.3.1R',
-                    serialNumber: 'V1912210063',
-                    temperature: 28
-                  }
-                : {
-                    ...prev,
-                    onuCount: newOnus.length,
-                    uptime: 3600 * (Math.floor(Math.random() * 500) + 100),
-                    cpu: Math.floor(Math.random() * 20) + 15,
-                    memory: Math.floor(Math.random() * 30) + 20,
-                    model: targetOlt.model || 'Chassis',
-                    mac: generateMac(),
-                    hardwareVersion: 'V1.2.0',
-                    softwareVersion: 'V4.2.1-Build-9082',
-                    serialNumber: generateSerialNumber(),
-                    temperature: Math.floor(Math.random() * 8) + 28
-                  }
-            ));
-          }
-
-          addToast(`Successfully discovered ${newOnus.length} active ONUs via SNMP.`, 'success');
-          logActivity('SNMP Sync Complete', `Polled OLT ${targetOlt.name} and auto-discovered ${newOnus.length} active ONUs`);
-        }
-      }, (idx + 1) * 350);
-    });
+    addToast(`✅ SNMP poll complete for ${targetOlt.name}. Real data loaded.`, 'success');
+    logActivity('SNMP Poll Success', `Real SNMP telemetry applied to ${targetOlt.name} (${targetOlt.ip})`);
   };
 
   // ==================== ROUTERS & SWITCHES ACTIONS ====================
@@ -1326,12 +1123,13 @@ export default function App() {
       const newRouter = {
         ...routerForm,
         id: newRouterId,
-        status: 'online',
-        uptime: 3600 * Math.floor(Math.random() * 12 + 1),
-        cpu: 10,
-        memory: 20,
-        temp: 35,
-        interfacesCount: 0
+        status: 'pending',
+        uptime: null,
+        cpu: null,
+        memory: null,
+        temp: null,
+        interfacesCount: 0,
+        snmpError: null,
       };
 
       setRouterList(prev => [...prev, newRouter]);
@@ -1357,16 +1155,123 @@ export default function App() {
   };
 
   // ==================== SNMP INTERFACE SCANNER ====================
-  const syncRouterInterfaces = (routerId, newRouterObj = null) => {
+  const syncRouterInterfaces = async (routerId, newRouterObj = null) => {
     if (!checkPermission('Sync Core Interfaces via SNMP', 'engineer')) return;
     const router = newRouterObj || routerList.find(r => r.id === routerId);
     if (!router) return;
 
-    setSnmpPollTitle(`SNMP Interface Ingestion: ${router.name} (${router.ip})`);
+    const appendLog = (line) => setSnmpPollLogs(prev => [...prev, line]);
+
+    setSnmpPollTitle(`SNMP Polling: ${router.name} (${router.ip})`);
     setSnmpPollProgress(0);
     setSnmpPollLogs([]);
     setSnmpPollModalOpen(true);
     setSnmpPollApplying(true);
+    setSyncingRouterId(routerId);
+
+    appendLog(`[${new Date().toLocaleTimeString()}] Connecting to SNMP backend proxy...`);
+    setSnmpPollProgress(5);
+
+    let result;
+    try {
+      const resp = await fetch('/api/snmp/poll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: router.ip,
+          community: router.community || settings.snmpCommunity || 'public',
+          port: router.snmpPort || settings.snmpPort || 161,
+          vendor: router.vendor,
+          deviceType: 'router',
+        }),
+      });
+      result = await resp.json();
+    } catch (fetchErr) {
+      appendLog(`[${new Date().toLocaleTimeString()}] ❌ FATAL: Cannot reach SNMP backend service.`);
+      appendLog(`[${new Date().toLocaleTimeString()}]    → Is the backend server running? (node server.js on port 5000)`);
+      appendLog(`[${new Date().toLocaleTimeString()}]    → Error: ${fetchErr.message}`);
+      setSnmpPollProgress(100);
+      setSnmpPollApplying(false);
+      setSyncingRouterId(null);
+      setRouterList(prev => prev.map(r => r.id === routerId ? { ...r, status: 'offline', snmpError: fetchErr.message } : r));
+      addToast('SNMP backend not reachable. Is server.js running?', 'danger');
+      return;
+    }
+
+    // Stream every log line from the backend
+    const serverLogs = result.logs || [];
+    let logProgress = 10;
+    const progressStep = Math.floor(90 / Math.max(serverLogs.length, 1));
+    for (const line of serverLogs) {
+      appendLog(line);
+      logProgress = Math.min(logProgress + progressStep, 95);
+      setSnmpPollProgress(logProgress);
+      await new Promise(r => setTimeout(r, 30));
+    }
+
+    setSnmpPollProgress(100);
+    setSnmpPollApplying(false);
+    setSyncingRouterId(null);
+
+    if (!result.success) {
+      appendLog(`[${new Date().toLocaleTimeString()}] ❌ SNMP FAILED: ${result.error}`);
+      appendLog(`[${new Date().toLocaleTimeString()}]    Device unreachable or credentials wrong.`);
+      setRouterList(prev => prev.map(r => r.id === routerId
+        ? { ...r, status: 'offline', snmpError: result.error }
+        : r
+      ));
+      addToast(`SNMP failed for ${router.name}: ${result.error}`, 'danger');
+      logActivity('SNMP Failed', `Cannot poll ${router.name}: ${result.error}`);
+      return;
+    }
+
+    appendLog(`[${new Date().toLocaleTimeString()}] ✅ SNMP poll successful. Applying real interface data...`);
+
+    const d = result.data;
+
+    // Use REAL interface names, descriptions, speed and status from device
+    const interfaces = d.interfaces.map(intf => ({
+      name: intf.name,
+      desc: intf.desc || '',
+      speed: intf.speed,
+      admin: intf.admin,
+      oper: intf.oper,
+      rxMbps: intf.rxMbps,
+      txMbps: intf.txMbps,
+    }));
+
+    for (const intf of interfaces) {
+      appendLog(`[${new Date().toLocaleTimeString()}]   ${intf.name.padEnd(28)} oper=${intf.oper}  speed=${intf.speed}  alias="${intf.desc}"`);
+    }
+
+    // Apply real telemetry to router record
+    const realTelemetry = {
+      status: 'online',
+      snmpError: null,
+      sysName: d.sysName,
+      sysDescr: d.sysDescr,
+      uptime: d.uptime,
+      cpu: d.cpu,
+      memory: d.memory,
+      temp: d.temperature,
+      serialNumber: d.serialNumber,
+      hardwareVersion: d.hardwareVersion,
+      softwareVersion: d.softwareVersion,
+      interfacesCount: interfaces.length,
+      lastPolled: new Date().toISOString(),
+    };
+
+    setRouterInterfaces(prev => [...prev.filter(i => i.deviceId !== router.id), {
+      deviceId: router.id,
+      interfaces,
+    }]);
+    setRouterList(prev => prev.map(r => r.id === router.id ? { ...r, ...realTelemetry } : r));
+    if (selectedRouter && selectedRouter.id === router.id) {
+      setSelectedRouter(prev => ({ ...prev, ...realTelemetry }));
+    }
+
+    addToast(`✅ SNMP poll complete for ${router.name}. ${interfaces.length} real interfaces loaded.`, 'success');
+    logActivity('SNMP Poll Success', `Real interfaces loaded for ${router.name} (${router.ip})`);
 
     const steps = [
       { prg: 5, log: `[SNMP Client] Establishing UDP session to SNMP agent at ${router.ip}:${settings.snmpPort || 161}...` },
